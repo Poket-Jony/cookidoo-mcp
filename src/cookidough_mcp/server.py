@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
+from . import resources
 from .config import Settings
 from .context import AppContext
 from .quality import QualityScorer
-from .session import CookidooSession
+from .session import CookidoughSession
 from .tools import register_all
 from .web_import import WebRecipeImporter
 
@@ -24,7 +25,7 @@ def build_server(settings: Settings | None = None) -> FastMCP:
 
     @asynccontextmanager
     async def lifespan(_mcp: FastMCP) -> AsyncIterator[AppContext]:
-        session = CookidooSession(resolved)
+        session = CookidoughSession(resolved)
         try:
             yield AppContext(
                 settings=resolved,
@@ -35,6 +36,7 @@ def build_server(settings: Settings | None = None) -> FastMCP:
         finally:
             await session.aclose()
 
-    mcp = FastMCP(name="cookidoo", lifespan=lifespan)
+    mcp = FastMCP(name="cookidough", lifespan=lifespan)
     register_all(mcp)
+    resources.register(mcp)
     return mcp

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..context import ToolContext, get_context
-from ..models import CollectionSummary
+from ..models import CollectionPage, CollectionSummary
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -13,8 +13,12 @@ if TYPE_CHECKING:
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
-    async def list_managed_collections(ctx: ToolContext, page: int = 0) -> list[CollectionSummary]:
-        """List the user's managed Cookidoo collections (Cookbooks)."""
+    async def list_managed_collections(ctx: ToolContext, page: int = 0) -> CollectionPage:
+        """List the user's managed Cookidoo collections (Cookbooks).
+
+        Returns one page of ``items`` plus ``total_pages``/``total_elements``
+        so callers know whether to request further pages.
+        """
         return await get_context(ctx).session.list_managed_collections(page=page)
 
     @mcp.tool()
@@ -29,8 +33,12 @@ def register(mcp: FastMCP) -> None:
         return f"Removed managed collection {collection_id}."
 
     @mcp.tool()
-    async def list_custom_collections(ctx: ToolContext, page: int = 0) -> list[CollectionSummary]:
-        """List the user's own custom collections."""
+    async def list_custom_collections(ctx: ToolContext, page: int = 0) -> CollectionPage:
+        """List the user's own custom collections.
+
+        Returns one page of ``items`` plus ``total_pages``/``total_elements``
+        so callers know whether to request further pages.
+        """
         return await get_context(ctx).session.list_custom_collections(page=page)
 
     @mcp.tool()

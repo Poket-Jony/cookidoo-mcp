@@ -1,12 +1,19 @@
-"""Tests for the CookidooSession repository facade."""
+"""Tests for the CookidoughSession repository facade."""
 
 from __future__ import annotations
 
 import asyncio
+import stat
+from pathlib import Path
 from typing import Any
 
 import pytest
-from cookidoo_api.exceptions import CookidooAuthException, CookidooRequestException
+from cookidoo_api.exceptions import (
+    CookidooAuthException,
+    CookidooConfigException,
+    CookidooRequestException,
+)
+from pydantic import SecretStr
 
 from cookidough_mcp.annotation_models import (
     BlendModeAnnotation,
@@ -31,10 +38,11 @@ from cookidough_mcp.annotation_models import (
     WarmUpModeAnnotation,
     WarmUpModeData,
 )
+from cookidough_mcp.config import Settings
 from cookidough_mcp.errors import AuthenticationError, NotFoundError, UpstreamApiError
 from cookidough_mcp.models import CustomRecipeDraft, RecipeStep
 from cookidough_mcp.session import (
-    CookidooSession,
+    CookidoughSession,
     _calendar_to_dto,
     _collection_to_dto,
     _custom_recipe_item_to_dto,
@@ -76,7 +84,7 @@ class _FakeClient:
         self.fail_first = False
 
     async def get_user_info(self) -> Any:
-        return _NS(username="alice", description=None, picture=None)
+        return _NS(id="u-1", username="alice", description=None, picture=None)
 
     async def login(self) -> None:
         self.logins += 1
@@ -104,7 +112,7 @@ class _FakeClient:
 
 @pytest.fixture
 def session_with_client(monkeypatch: pytest.MonkeyPatch, settings: Any) -> Any:
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
     fake = _FakeClient()
     session._client = fake  # type: ignore[assignment]
     session._http = _FakeHttp()  # type: ignore[assignment]
@@ -159,7 +167,7 @@ async def test_ensure_logged_in_refuses_after_aclose(settings: Any) -> None:
     """Regression: once ``aclose`` has latched, a stale tool call must not
     silently bootstrap a fresh login behind the back of the lifespan that
     has already torn the session down."""
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
     await session.aclose()
     with pytest.raises(UpstreamApiError, match="Session is closed"):
         await session._ensure_logged_in()
@@ -167,7 +175,7 @@ async def test_ensure_logged_in_refuses_after_aclose(settings: Any) -> None:
 
 async def test_aclose_is_idempotent(settings: Any) -> None:
     """Lifespan shutdown should be safe to invoke multiple times."""
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
     await session.aclose()
     await session.aclose()
 
@@ -175,7 +183,7 @@ async def test_aclose_is_idempotent(settings: Any) -> None:
 async def test_run_wraps_request_exception_as_upstream(
     settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
 
     class _Boom:
         async def some_call(self) -> None:
@@ -194,7 +202,7 @@ async def test_run_maps_request_exception_on_retry(
 ) -> None:
     """After a 401, a downstream `CookidooRequestException` on the retry must
     still be mapped to `UpstreamApiError`."""
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
     session._http = _FakeHttp()  # type: ignore[assignment]
     calls = {"n": 0}
 
@@ -226,7 +234,7 @@ async def test_run_maps_auth_exception_on_retry_to_domain_error(
     """A persistent auth failure (first call AND retry) must surface as our
     domain ``AuthenticationError``, not as the raw ``CookidooAuthException``
     — otherwise the ``session.py`` facade leaks the upstream library type."""
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
     session._http = _FakeHttp()  # type: ignore[assignment]
     calls = {"n": 0}
 
@@ -253,7 +261,7 @@ async def test_run_maps_auth_exception_on_retry_to_domain_error(
 async def test_get_recipe_details_translates_request_exception_to_not_found(
     settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
 
     class _Missing:
         async def get_recipe_details(self, _id: str) -> None:
@@ -270,7 +278,7 @@ async def test_get_recipe_details_translates_request_exception_to_not_found(
 async def test_ensure_logged_in_translates_auth_exception(
     settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
 
     async def _options(country: str, language: str) -> list[Any]:
         return [_NS(country_code=country, language=language, url="https://x/x")]
@@ -290,7 +298,7 @@ async def test_ensure_logged_in_translates_auth_exception(
 async def test_relogin_is_skipped_when_generation_advanced(
     settings: Any,
 ) -> None:
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
     session._http = _FakeHttp()  # type: ignore[assignment]
     session._session_generation = 5
     calls = {"n": 0}
@@ -310,7 +318,7 @@ async def test_relogin_is_skipped_when_generation_advanced(
 async def test_relogin_runs_once_for_parallel_callers(settings: Any) -> None:
     """Two coroutines that hit a 401 with the same observed generation must
     re-login exactly once, not in serial."""
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
     session._http = _FakeHttp()  # type: ignore[assignment]
     session._session_generation = 1
     calls = {"n": 0}
@@ -332,7 +340,7 @@ async def test_relogin_runs_once_for_parallel_callers(settings: Any) -> None:
 
 
 async def test_relogin_translates_auth_exception(settings: Any) -> None:
-    session = CookidooSession(settings)
+    session = CookidoughSession(settings)
     session._http = _FakeHttp()  # type: ignore[assignment]
     session._session_generation = 1
 
@@ -344,6 +352,157 @@ async def test_relogin_translates_auth_exception(settings: Any) -> None:
 
     with pytest.raises(AuthenticationError):
         await session._relogin(observed_generation=1)
+
+
+def _settings_with_cookie_file(tmp_path: Path) -> Settings:
+    return Settings(
+        email="test@example.com",
+        password=SecretStr("hunter2"),
+        country="de",
+        language="de",
+        cookies_file=tmp_path / "cookies.json",
+    )
+
+
+class _CookieClient:
+    """Fake Cookidoo client for the cookie load/save lifecycle."""
+
+    def __init__(self, *, logged_in_after_load: bool = True, load_raises: bool = False) -> None:
+        self._logged_in = False
+        self._logged_in_after_load = logged_in_after_load
+        self._load_raises = load_raises
+        self.loads: list[Path] = []
+        self.saves: list[Path] = []
+        self.logins = 0
+        self.localization = _NS(url="https://cookidoo.de", language="de-DE", country_code="de")
+
+    def load_cookies(self, path: Path) -> None:
+        if self._load_raises:
+            raise CookidooConfigException(f"Cannot load cookies from {path}.")
+        self.loads.append(path)
+        self._logged_in = self._logged_in_after_load
+
+    def save_cookies(self, path: Path) -> None:
+        self.saves.append(path)
+        Path(path).write_text("[]", encoding="utf-8")
+
+    async def login(self) -> None:
+        self.logins += 1
+
+
+def test_try_load_cookies_returns_false_without_file(tmp_path: Path) -> None:
+    session = CookidoughSession(_settings_with_cookie_file(tmp_path))
+    client = _CookieClient()
+    assert session._try_load_cookies(client) is False  # type: ignore[arg-type]
+    assert client.loads == []
+
+
+def test_try_load_cookies_falls_back_on_unreadable_file(tmp_path: Path) -> None:
+    settings = _settings_with_cookie_file(tmp_path)
+    assert settings.cookies_file is not None
+    settings.cookies_file.write_text("not json", encoding="utf-8")
+    session = CookidoughSession(settings)
+    client = _CookieClient(load_raises=True)
+    assert session._try_load_cookies(client) is False  # type: ignore[arg-type]
+
+
+def test_try_load_cookies_requires_auth_cookies_in_file(tmp_path: Path) -> None:
+    """A readable file without the required auth cookies must not count as a
+    restored login — otherwise the first call is a guaranteed 401."""
+    settings = _settings_with_cookie_file(tmp_path)
+    assert settings.cookies_file is not None
+    settings.cookies_file.write_text("[]", encoding="utf-8")
+    session = CookidoughSession(settings)
+    client = _CookieClient(logged_in_after_load=False)
+    assert session._try_load_cookies(client) is False  # type: ignore[arg-type]
+    assert client.loads == [settings.cookies_file]
+
+
+def test_persist_cookies_writes_file_with_owner_only_mode(tmp_path: Path) -> None:
+    settings = _settings_with_cookie_file(tmp_path)
+    session = CookidoughSession(settings)
+    client = _CookieClient()
+    session._persist_cookies(client)  # type: ignore[arg-type]
+    assert settings.cookies_file is not None
+    assert client.saves == [settings.cookies_file]
+    mode = stat.S_IMODE(settings.cookies_file.stat().st_mode)
+    assert mode == 0o600
+
+
+def test_persist_cookies_swallows_write_errors(tmp_path: Path) -> None:
+    settings = _settings_with_cookie_file(tmp_path)
+    session = CookidoughSession(settings)
+
+    class _BrokenClient(_CookieClient):
+        def save_cookies(self, path: Path) -> None:
+            raise OSError("read-only filesystem")
+
+    # Must not raise — persisting is best-effort.
+    session._persist_cookies(_BrokenClient())  # type: ignore[arg-type]
+
+
+async def test_ensure_logged_in_skips_login_when_cookies_restore_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings_with_cookie_file(tmp_path)
+    assert settings.cookies_file is not None
+    settings.cookies_file.write_text("[]", encoding="utf-8")
+    session = CookidoughSession(settings)
+    client: Any = _CookieClient(logged_in_after_load=True)
+
+    async def _options(country: str, language: str) -> list[Any]:
+        return [_NS(country_code=country, language=language, url="https://cookidoo.de")]
+
+    monkeypatch.setattr("cookidough_mcp.session.get_localization_options", _options)
+    monkeypatch.setattr("cookidough_mcp.session.Cookidoo", lambda **_: client)
+
+    try:
+        result = await session._ensure_logged_in()
+    finally:
+        await session.aclose()
+
+    assert client.logins == 0
+    assert client.loads == [settings.cookies_file]
+    assert session.session_generation == 1
+    assert result is client
+
+
+async def test_ensure_logged_in_persists_cookies_after_fresh_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings_with_cookie_file(tmp_path)
+    session = CookidoughSession(settings)
+    client = _CookieClient()  # no cookie file on disk → fresh login
+
+    async def _options(country: str, language: str) -> list[Any]:
+        return [_NS(country_code=country, language=language, url="https://cookidoo.de")]
+
+    monkeypatch.setattr("cookidough_mcp.session.get_localization_options", _options)
+    monkeypatch.setattr("cookidough_mcp.session.Cookidoo", lambda **_: client)
+
+    try:
+        await session._ensure_logged_in()
+    finally:
+        await session.aclose()
+
+    assert client.logins == 1
+    assert settings.cookies_file is not None
+    assert client.saves == [settings.cookies_file]
+
+
+async def test_relogin_persists_refreshed_cookies(tmp_path: Path) -> None:
+    settings = _settings_with_cookie_file(tmp_path)
+    session = CookidoughSession(settings)
+    session._http = _FakeHttp()  # type: ignore[assignment]
+    session._session_generation = 1
+    client = _CookieClient()
+    session._client = client  # type: ignore[assignment]
+
+    await session._relogin(observed_generation=1)
+
+    assert client.logins == 1
+    assert settings.cookies_file is not None
+    assert client.saves == [settings.cookies_file]
 
 
 def test_collection_to_dto_counts_recipes() -> None:
@@ -570,6 +729,10 @@ def test_draft_to_payload_serializes_known_fields() -> None:
     assert payload["ingredients"] == [{"type": "INGREDIENT", "text": "Apple"}]
     assert payload["instructions"] == [{"type": "STEP", "text": "Cut and serve."}]
     assert payload["hints"] == "Use a sharp knife."
+    # Image keys must be absent: the PATCH endpoint leaves omitted fields
+    # untouched, so updates never wipe a previously uploaded photo.
+    assert "image" not in payload
+    assert "isImageOwnedByUser" not in payload
 
 
 def test_custom_recipe_draft_rejects_unknown_tools() -> None:

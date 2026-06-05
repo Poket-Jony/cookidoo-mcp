@@ -34,6 +34,11 @@ htmlcov/
 .env*
 !.env.example
 
+# Persisted session cookies (COOKIDOUGH_COOKIES_FILE) hold live
+# session credentials — equivalent to a password.
+*.cookies.json
+cookies.json
+
 # OS
 .DS_Store
 Thumbs.db

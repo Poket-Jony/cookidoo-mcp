@@ -47,3 +47,30 @@ SUGGEST_RECIPE_FETCH_CONCURRENCY: Final[int] = 5
 # ``"soil"``, ``"egg"`` → ``"eggplant"``). Three chars is a pragmatic floor
 # that still lets common short head nouns like ``"rice"`` / ``"salt"`` through.
 SUGGEST_MIN_INGREDIENT_LENGTH: Final[int] = 3
+
+# How many search candidates the library-wide suggestion path requests, as a
+# multiple of ``max_results``. The local scorer re-ranks by ingredient match,
+# so it needs more candidates than results — 3x gives it slack without
+# fetching details for the whole result set.
+SUGGEST_SEARCH_CANDIDATE_FACTOR: Final[int] = 3
+
+# Upper bound for the calendar→shopping-list date range. Four weeks covers a
+# realistic meal-plan horizon; anything larger is more likely a typo'd date
+# and would fan out into dozens of write calls against the shopping list.
+CALENDAR_SHOPPING_MAX_RANGE_DAYS: Final[int] = 28
+
+# Custom-recipe image upload (verified against the live flow, 2026-06-05):
+# Cookidoo signs {timestamp, upload_preset, source} via its /image/signature
+# endpoint, the file goes directly to Vorwerk's Cloudinary tenant, and the
+# returned public_id is PATCHed onto the recipe. The api_key is Cloudinary's
+# public identifier for that tenant — not a secret.
+CLOUDINARY_UPLOAD_URL: Final[str] = (
+    "https://api-eu.cloudinary.com/v1_1/vorwerk-users-gc/image/upload"
+)
+CLOUDINARY_UPLOAD_PRESET: Final[str] = "prod-customer-recipe-signed"
+CLOUDINARY_UPLOAD_SOURCE: Final[str] = "uw"
+CLOUDINARY_API_KEY: Final[str] = "993585863591145"
+
+# Upload cap for recipe images. Cookidoo's own web client accepts photos in
+# this range; the moderation pipeline additionally requires >=80px per side.
+MAX_RECIPE_IMAGE_BYTES: Final[int] = 10 * 1024 * 1024

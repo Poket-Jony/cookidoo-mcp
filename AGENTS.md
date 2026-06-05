@@ -10,7 +10,8 @@ here.
 `cookidough-mcp` is a Model Context Protocol (MCP) server that exposes the
 Thermomix [Cookidoo](https://cookidoo.de) platform to LLM clients (Claude
 Desktop, Claude Code, any MCP-aware tool). It consolidates four predecessor
-projects into a single Python 3.12 codebase built on **FastMCP** and the
+projects into a single Python 3.12+ codebase (tested through 3.14) built
+on **FastMCP** and the
 [`miaucl/cookidoo-api`](https://github.com/miaucl/cookidoo-api) library.
 
 The full feature list and tool table is in [`README.md`](README.md).
@@ -79,10 +80,10 @@ errors block the build.
 
 - Async tests are the default (`asyncio_mode = "auto"` in `pyproject.toml`).
 - `tests/conftest.py` provides a `FakeSession` that is statically guarded
-  against `CookidooSessionProtocol`:
+  against `CookidoughSessionProtocol`:
 
   ```python
-  _PROTOCOL_GUARD: CookidooSessionProtocol = FakeSession()
+  _PROTOCOL_GUARD: CookidoughSessionProtocol = FakeSession()
   ```
 
   If you add a method to the protocol, the guard breaks at mypy time —
@@ -109,6 +110,7 @@ src/cookidough_mcp/
 ├── annotation_models.py  # Guided-cooking annotation DTOs (discriminated union)
 ├── annotations.py        # Annotation inferrer (text patterns → StepAnnotation)
 ├── web_import.py         # recipe-scrapers adapter → CustomRecipeDraft
+├── resources.py          # MCP resources + prompts (read-only context, workflows)
 ├── server.py        # FastMCP instance + lifespan
 └── tools/           # Thin tool adapters: one module per domain
 ```
@@ -116,7 +118,7 @@ src/cookidough_mcp/
 **Key invariants** — do not break these without discussion:
 
 - `session.py` is the **only** module that imports from `cookidoo_api`.
-  Tools always go through the `CookidooSessionProtocol` interface.
+  Tools always go through the `CookidoughSessionProtocol` interface.
 - Tool modules in `tools/` are **thin adapters**. Business logic lives in
   `session.py`, `quality.py`, or `web_import.py`. A tool function should
   read like: validate → call session → return DTO.
@@ -138,6 +140,22 @@ src/cookidough_mcp/
 - The HTTP session must be built with `aiohttp.CookieJar(unsafe=True)` —
   the OAuth2 redirect chain crosses domains (`cookidoo.<tld>` → CIAM →
   login-srv), and the default jar drops those cookies.
+- The interaction endpoints (rating, bookmark, recipe-notes,
+  cooking-history, recommender, customer-devices) are **undocumented**
+  Cookidoo APIs discovered via the platform's `.well-known/home` document.
+  Methods and payload shapes were verified live on 2026-06-05 (see
+  `tests/smoke/smoke_test.py`); parsers in `session.py` must still
+  tolerate missing fields and degrade to `None`/empty instead of raising,
+  and per-action failures in `set_recipe_interactions` are reported in the
+  result DTO rather than failing the call.
+- Naming (legal requirement): the **project** is "cookidough" /
+  "Cookidough" — never "cookidoo". This covers every project-owned
+  identifier: the server name, resource URIs, env prefix, config keys,
+  and class prefixes (`CookidoughSession`, `CookidoughSessionProtocol`,
+  `CookidoughMcpError`). "Cookidoo" may appear only when referring to the
+  third-party platform itself (prose, platform URLs) or in identifiers
+  imported from the upstream `cookidoo_api` package, which we cannot
+  rename.
 
 ## Security considerations
 
@@ -155,6 +173,16 @@ src/cookidough_mcp/
   default, see `constants.HTTP_TIMEOUT_SECONDS`). Do not bypass this.
 - `aiohttp.ClientSession` cleanup is reentrant and lock-protected; do not
   null `self._http` outside of `aclose()`.
+- The optional cookie file (`COOKIDOUGH_COOKIES_FILE`) contains live
+  session cookies — equivalent to a password. `_persist_cookies` chmods it
+  to `0600` right after writing; never log its contents, never widen its
+  permissions, and keep the `.gitignore` patterns (`cookies.json`,
+  `*.cookies.json`) intact.
+- `set_custom_recipe_image` uploads the image bytes directly to Vorwerk's
+  Cloudinary tenant (third-party egress, same as the official web app).
+  The upload runs on a dedicated plain `aiohttp.ClientSession` — the
+  Cookidoo cookie jar must NEVER be sent to that host. URL sources are
+  restricted to http/https and capped at `MAX_RECIPE_IMAGE_BYTES`.
 
 ## Dev environment tips
 

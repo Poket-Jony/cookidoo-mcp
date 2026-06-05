@@ -1,23 +1,23 @@
-"""Domain exception hierarchy for the Cookidoo MCP server."""
+"""Domain exception hierarchy for the cookidough MCP server."""
 
 
-class CookidooMcpError(Exception):
+class CookidoughMcpError(Exception):
     """Base class for all errors raised by this server."""
 
 
-class AuthenticationError(CookidooMcpError):
+class AuthenticationError(CookidoughMcpError):
     """Raised when login (or a re-login after session expiry) fails."""
 
 
-class NotFoundError(CookidooMcpError):
+class NotFoundError(CookidoughMcpError):
     """Raised when a requested resource does not exist."""
 
 
-class UpstreamApiError(CookidooMcpError):
+class UpstreamApiError(CookidoughMcpError):
     """Raised when an upstream Cookidoo request fails for a transport reason."""
 
 
-class QualityGateError(CookidooMcpError):
+class QualityGateError(CookidoughMcpError):
     """Raised when a custom recipe fails the configured quality bar."""
 
     def __init__(self, message: str, score: int, threshold: int) -> None:
@@ -26,5 +26,5 @@ class QualityGateError(CookidooMcpError):
         self.threshold = threshold
 
 
-class WebImportError(CookidooMcpError):
+class WebImportError(CookidoughMcpError):
     """Raised when a remote recipe cannot be scraped or mapped."""

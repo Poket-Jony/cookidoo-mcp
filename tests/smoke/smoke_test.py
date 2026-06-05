@@ -24,7 +24,7 @@ auto-discover it. Run it explicitly:
 
     .venv/bin/python tests/smoke/smoke_test.py
 
-Every method on ``CookidooSessionProtocol`` is exercised through its tool
+Every method on ``CookidoughSessionProtocol`` is exercised through its tool
 adapter. The two destructive operations have explicit safety guards:
 
 - ``add_managed_collection`` / ``remove_managed_collection`` run against a
@@ -36,6 +36,15 @@ adapter. The two destructive operations have explicit safety guards:
 ``import_web_recipe`` is intentionally skipped — its real dependency is an
 external recipe site whose markup we do not control. Its behaviour is
 covered by ``tests/test_tools.py`` with a mocked importer.
+
+The interaction, recommendation, bookmark, and device endpoints are
+undocumented Cookidoo APIs whose methods and payload shapes were verified
+against the live API. They are asserted as hard contracts
+here — any mismatch fails the run.
+
+The interactions section leaves two persistent traces on the account by
+design: a 5-star rating and a cooked-history entry on the test recipe
+(neither has a delete endpoint). Bookmark and note are reverted.
 """
 
 from __future__ import annotations
@@ -108,6 +117,7 @@ def _refuse_if_dotenv_would_override(repo: Path) -> None:
 # missing .env.test fails fast with a clear message rather than an import noise.
 from mcp import ClientSession, StdioServerParameters  # noqa: E402
 from mcp.client.stdio import stdio_client  # noqa: E402
+from pydantic import AnyUrl  # noqa: E402
 
 MARKER = uuid.uuid4().hex[:8]
 COLLECTION_NAME = f"[SMOKE_TEST cookidough-mcp] {MARKER}"
@@ -252,11 +262,37 @@ async def main() -> int:
                 for name in tool_names:
                     info(f"- {name}")
 
+                section("Resource & prompt discovery")
+                try:
+                    resources_resp = await mcp.list_resources()
+                    resource_uris = sorted(str(r.uri) for r in resources_resp.resources)
+                    ok(f"{len(resource_uris)} resources: {resource_uris}")
+                    prompts_resp = await mcp.list_prompts()
+                    prompt_names = sorted(p.name for p in prompts_resp.prompts)
+                    ok(f"{len(prompt_names)} prompts: {prompt_names}")
+                except Exception as e:
+                    failures += 1
+                    fail(f"resource/prompt discovery raised: {e!r}")
+
                 section("Authentication")
                 profile = await _call(mcp, "get_user_profile")
-                ok(f"username={profile.get('username')!r}")
+                ok(f"id={profile.get('id')!r} username={profile.get('username')!r}")
                 if profile.get("description"):
                     info(f"description={profile['description']!r}")
+
+                section("Profile devices (read-only)")
+                try:
+                    profile_with_devices = await _call(
+                        mcp, "get_user_profile", include_devices=True
+                    )
+                    devices = profile_with_devices.get("devices", [])
+                    accessories = profile_with_devices.get("accessories", [])
+                    ok(f"devices={devices!r} accessories={accessories!r}")
+                    if not devices and not accessories:
+                        info("both lists empty — no device linked to this account")
+                except Exception as e:
+                    failures += 1
+                    fail(f"get_user_profile(include_devices=True) raised: {e!r}")
 
                 section("Subscription (read-only)")
                 sub = await _call(mcp, "get_subscription")
@@ -270,18 +306,28 @@ async def main() -> int:
                         f"expires={sub.get('expires')}"
                     )
 
-                section("Managed collections (read-only)")
-                managed = await _call(mcp, "list_managed_collections", page=0)
-                ok(f"{len(managed)} managed collection(s) on first page")
+                section("Managed collections (read-only, paged)")
+                managed_page = await _call(mcp, "list_managed_collections", page=0)
+                managed = managed_page["items"]
+                ok(
+                    f"{len(managed)} managed collection(s) on page 0 — "
+                    f"total_pages={managed_page['total_pages']} "
+                    f"total_elements={managed_page['total_elements']}"
+                )
                 for c in managed[:3]:
                     info(
                         f"- {c['name']!r}: {c['recipe_count']} recipes "
                         f"in {c['chapter_count']} chapters"
                     )
 
-                section("Custom collections (read-only)")
-                customs = await _call(mcp, "list_custom_collections", page=0)
-                ok(f"{len(customs)} custom collection(s) on first page")
+                section("Custom collections (read-only, paged)")
+                customs_page = await _call(mcp, "list_custom_collections", page=0)
+                customs = customs_page["items"]
+                ok(
+                    f"{len(customs)} custom collection(s) on page 0 — "
+                    f"total_pages={customs_page['total_pages']} "
+                    f"total_elements={customs_page['total_elements']}"
+                )
                 for c in customs[:3]:
                     info(f"- {c['name']!r}: {c['recipe_count']} recipes")
 
@@ -289,8 +335,11 @@ async def main() -> int:
                 shop = await _call(mcp, "get_shopping_list")
                 ok(
                     f"recipe items: {len(shop['ingredient_items'])}, "
-                    f"additional items: {len(shop['additional_items'])}"
+                    f"additional items: {len(shop['additional_items'])}, "
+                    f"recipes on list: {len(shop['recipes'])}"
                 )
+                for r in shop["recipes"][:3]:
+                    info(f"- {r['name']!r} (id={r['id']}, {len(r['ingredients'])} ingredients)")
 
                 section("Calendar (read-only)")
                 week = await _call(mcp, "get_calendar_week", day=date.today().isoformat())
@@ -315,8 +364,77 @@ async def main() -> int:
                         f"id={details['id']!r} name={details['name']!r} "
                         f"ingredients={len(details['ingredients'])}"
                     )
+                    ok(
+                        f"enrichment: categories={len(details['categories'])} "
+                        f"collections={len(details['collections'])} "
+                        f"nutrition={len(details['nutrition'])}"
+                    )
+                    for n in details["nutrition"][:1]:
+                        values = ", ".join(
+                            f"{v['value']}{v['unit']} {v['type']}" for v in n["values"][:4]
+                        )
+                        info(f"- nutrition per {n['quantity']} {n['unit_notation']}: {values}")
+                    if not details["nutrition"]:
+                        info(
+                            "nutrition list empty — upstream marks the field as "
+                            "optional, so this is not necessarily a parser miss"
+                        )
+                    with_images = await _call(
+                        mcp,
+                        "get_recipe_details",
+                        recipe_id=recipe_id_for_lookup,
+                        include_images=True,
+                    )
+                    images = with_images["images"]
+                    if images:
+                        ok(f"include_images: {len(images)} image(s)")
+                        info(f"- first square: {images[0]['square']}")
+                        unresolved = [
+                            value
+                            for image in images
+                            for value in image.values()
+                            if isinstance(value, str) and "{transformation}" in value
+                        ]
+                        if unresolved:
+                            failures += 1
+                            fail(f"unresolved CDN placeholder in {len(unresolved)} URL(s)")
+                    else:
+                        failures += 1
+                        fail("include_images=True returned no images for a catalogue recipe")
                 else:
                     warn("no recipe ID found in calendar — skipping get_recipe_details")
+
+                section("Recipe interactions read (read-only)")
+                if recipe_id_for_lookup:
+                    try:
+                        with_inter = await _call(
+                            mcp,
+                            "get_recipe_details",
+                            recipe_id=recipe_id_for_lookup,
+                            include_interactions=True,
+                        )
+                        inter = with_inter.get("interactions")
+                        if inter is None:
+                            failures += 1
+                            fail("interactions field stayed null despite the flag")
+                        else:
+                            ok(
+                                f"own_rating={inter.get('own_rating')} "
+                                f"average_rating={inter.get('average_rating')} "
+                                f"number_of_ratings={inter.get('number_of_ratings')} "
+                                f"note={inter.get('note')!r}"
+                            )
+                            if inter.get("average_rating") is None:
+                                failures += 1
+                                fail(
+                                    "average_rating is null for a catalogue recipe — "
+                                    "the aggregated-ratings parser regressed"
+                                )
+                    except Exception as e:
+                        failures += 1
+                        fail(f"get_recipe_details(include_interactions=True) raised: {e!r}")
+                else:
+                    warn("no recipe ID — skipping interactions read test")
 
                 section("Recipe structure generation (no API)")
                 annotated_step_text = (
@@ -408,10 +526,116 @@ async def main() -> int:
                     failures += 1
                     fail(f"search_recipes raised: {e!r}")
 
+                section("Recipe search with filters (read-only)")
+                # The filter params mirror the Cookidoo web UI query string;
+                # their wire format was implemented without live verification,
+                # so this section both exercises and validates them.
+                try:
+                    filtered = await _call(
+                        mcp,
+                        "search_recipes",
+                        query="Pasta",
+                        limit=5,
+                        max_total_minutes=30,
+                        min_rating=4,
+                    )
+                    ok(f"{len(filtered)} hit(s) for 'Pasta' with <=30min & rating>=4")
+                    overlong = [
+                        h
+                        for h in filtered
+                        if h.get("total_time_seconds") and h["total_time_seconds"] > 1800
+                    ]
+                    underrated = [h for h in filtered if h.get("rating") and h["rating"] < 3.5]
+                    for hit in filtered[:3]:
+                        info(
+                            f"- {hit['name']!r} total={hit.get('total_time_seconds')}s "
+                            f"rating={hit.get('rating')}"
+                        )
+                    if not filtered:
+                        failures += 1
+                        fail(
+                            "0 hits with filters while the unfiltered query matched — "
+                            "the filter wire format regressed"
+                        )
+                    elif overlong or underrated:
+                        failures += 1
+                        fail(
+                            f"{len(overlong)} hit(s) over 30min / {len(underrated)} "
+                            f"below rating 3.5 — upstream ignored the filter params"
+                        )
+                    else:
+                        ok("all hits respect the requested filters")
+                except Exception as e:
+                    failures += 1
+                    fail(f"search_recipes with filters raised: {e!r}")
+
+                section("Recommendations (read-only)")
+                try:
+                    foryou = await _call(mcp, "get_recipe_recommendations", limit=5)
+                    if foryou:
+                        ok(f"'For you' feed returned {len(foryou)} recipe(s)")
+                        for hit in foryou[:3]:
+                            info(f"- {hit['name']!r} (id={hit['id']})")
+                    else:
+                        failures += 1
+                        fail("'For you' feed returned no recipes")
+                    if recipe_id_for_lookup:
+                        similar = await _call(
+                            mcp,
+                            "get_recipe_recommendations",
+                            recipe_id=recipe_id_for_lookup,
+                            limit=5,
+                        )
+                        if similar:
+                            ok(f"similar-recipes returned {len(similar)} recipe(s)")
+                        else:
+                            failures += 1
+                            fail("similar-recipes returned no recipes")
+                except Exception as e:
+                    failures += 1
+                    fail(f"get_recipe_recommendations raised: {e!r}")
+
+                section("Bookmarked recipes (read-only)")
+                try:
+                    bookmarks = await _call(mcp, "list_bookmarked_recipes")
+                    ok(f"list_bookmarked_recipes returned {len(bookmarks)} recipe(s)")
+                except Exception as e:
+                    failures += 1
+                    fail(f"list_bookmarked_recipes raised: {e!r}")
+
+                section("Cooking history (read-only)")
+                try:
+                    history = await _call(mcp, "get_cooking_history", limit=5)
+                    if history:
+                        ok(f"get_cooking_history returned {len(history)} entr(ies)")
+                        info(
+                            f"- {history[0]['recipe']['name']!r} "
+                            f"cooked_at={history[0]['cooked_at']}"
+                        )
+                    else:
+                        failures += 1
+                        fail("cooking history empty despite earlier mark_cooked runs")
+                except Exception as e:
+                    failures += 1
+                    fail(f"get_cooking_history raised: {e!r}")
+
+                section("Resource read (cookidough://shopping-list)")
+                try:
+                    resource = await mcp.read_resource(AnyUrl("cookidough://shopping-list"))
+                    text = resource.contents[0].text  # type: ignore[union-attr]
+                    parsed = json.loads(text)
+                    ok(
+                        f"resource read ok — {len(parsed['ingredient_items'])} recipe "
+                        f"item(s), {len(parsed['additional_items'])} additional item(s)"
+                    )
+                except Exception as e:
+                    failures += 1
+                    fail(f"resource read raised: {e!r}")
+
                 section("Recipe suggestions from ingredients (read-only)")
-                # ``_collect_recipe_ids`` walks every page of every collection,
-                # so cap ``max_results`` and use short, common ingredients
-                # that pass the >=3 char min-length guard.
+                # Without collection_ids this now searches the whole library
+                # via the server-side ingredients filter (falling back to the
+                # collection walk when the filter yields nothing).
                 try:
                     suggestions = await _call(
                         mcp,
@@ -448,7 +672,7 @@ async def main() -> int:
                             f"added managed collection id={added_mc['id']} "
                             f"name={added_mc['name']!r}"
                         )
-                        post_add = await _call(mcp, "list_managed_collections", page=0)
+                        post_add = (await _call(mcp, "list_managed_collections", page=0))["items"]
                         if any(c["id"] == SMOKE_MANAGED_COLLECTION_ID for c in post_add):
                             ok("verified present after add")
                         else:
@@ -461,7 +685,9 @@ async def main() -> int:
                         )
                         pending_managed_collection_id = None
                         ok(f"removed managed collection ({msg})")
-                        post_remove = await _call(mcp, "list_managed_collections", page=0)
+                        post_remove = (await _call(mcp, "list_managed_collections", page=0))[
+                            "items"
+                        ]
                         if any(c["id"] == SMOKE_MANAGED_COLLECTION_ID for c in post_remove):
                             failures += 1
                             fail("managed collection still present after remove")
@@ -697,6 +923,182 @@ async def main() -> int:
                 else:
                     warn("upload failed earlier — skipping get_custom_recipe_details")
 
+                section("WRITE: custom recipe update (upload_custom_recipe + recipe_id)")
+                if created_recipe_id is not None:
+                    updated_name = f"{RECIPE_NAME} v2"
+                    try:
+                        updated_draft = {**draft_dict, "name": updated_name}
+                        update_result = await _call(
+                            mcp,
+                            "upload_custom_recipe",
+                            draft=updated_draft,
+                            force=True,
+                            recipe_id=created_recipe_id,
+                        )
+                        if update_result["recipe_id"] == created_recipe_id:
+                            ok(f"update returned the same recipe id {created_recipe_id!r}")
+                        else:
+                            failures += 1
+                            fail(
+                                f"update returned id {update_result['recipe_id']!r} "
+                                f"instead of {created_recipe_id!r}"
+                            )
+                        # The PATCH may be eventually consistent — allow one retry.
+                        for attempt in range(2):
+                            detail_after = await _call(
+                                mcp,
+                                "get_custom_recipe_details",
+                                recipe_id=created_recipe_id,
+                            )
+                            if detail_after["name"] == updated_name:
+                                ok(f"name change persisted (attempt {attempt + 1})")
+                                break
+                            await asyncio.sleep(3)
+                        else:
+                            failures += 1
+                            fail(
+                                f"updated name not visible after retries: "
+                                f"got {detail_after['name']!r}"
+                            )
+                    except Exception as e:
+                        failures += 1
+                        fail(f"custom recipe update cycle raised: {e!r}")
+                else:
+                    warn("no uploaded custom recipe available — skipping update test")
+
+                section("WRITE: custom recipe image upload")
+                if created_recipe_id is not None:
+                    try:
+                        import struct
+                        import tempfile
+                        import zlib
+
+                        def _chunk(tag: bytes, data: bytes) -> bytes:
+                            raw = tag + data
+                            return (
+                                struct.pack(">I", len(data))
+                                + raw
+                                + struct.pack(">I", zlib.crc32(raw))
+                            )
+
+                        row = b"\x00" + b"\xc8\x78\x28" * 100
+                        png = (
+                            b"\x89PNG\r\n\x1a\n"
+                            + _chunk(b"IHDR", struct.pack(">IIBBBBB", 100, 100, 8, 2, 0, 0, 0))
+                            + _chunk(b"IDAT", zlib.compress(row * 100))
+                            + _chunk(b"IEND", b"")
+                        )
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+                            handle.write(png)
+                            png_path = handle.name
+                        image_result = await _call(
+                            mcp,
+                            "set_custom_recipe_image",
+                            recipe_id=created_recipe_id,
+                            image_source=png_path,
+                        )
+                        await asyncio.to_thread(Path(png_path).unlink)
+                        if image_result["image"] and "customer-recipe" in image_result["image"]:
+                            ok(f"image set: {image_result['image']}")
+                        else:
+                            failures += 1
+                            fail(f"unexpected image value: {image_result['image']!r}")
+
+                        # A later full update must NOT wipe the photo.
+                        await _call(
+                            mcp,
+                            "upload_custom_recipe",
+                            draft={**draft_dict, "name": f"{RECIPE_NAME} v3"},
+                            force=True,
+                            recipe_id=created_recipe_id,
+                        )
+                        detail_after_update = await _call(
+                            mcp,
+                            "get_custom_recipe_details",
+                            recipe_id=created_recipe_id,
+                        )
+                        if detail_after_update["image"] and "customer-recipe" in (
+                            detail_after_update["image"] or ""
+                        ):
+                            ok("image survived a subsequent full recipe update")
+                        else:
+                            failures += 1
+                            fail(f"image wiped by update: {detail_after_update['image']!r}")
+                    except Exception as e:
+                        failures += 1
+                        fail(f"custom recipe image cycle raised: {e!r}")
+                else:
+                    warn("no uploaded custom recipe available — skipping image test")
+
+                section("WRITE: recipe interactions (rating + history persist)")
+                # Bookmark and note are reverted below; the 5-star rating and
+                # the cooked-history entry have no delete endpoint and remain
+                # on the account by design (documented in the module header).
+                if recipe_id_for_lookup:
+                    smoke_note = f"[SMOKE_TEST cookidough-mcp] note {MARKER}"
+                    try:
+                        inter_result = await _call(
+                            mcp,
+                            "set_recipe_interactions",
+                            recipe_id=recipe_id_for_lookup,
+                            rating=5,
+                            bookmarked=True,
+                            note=smoke_note,
+                            mark_cooked=True,
+                        )
+                        for action in ("rating", "bookmark", "note", "cooked"):
+                            status = inter_result.get(action)
+                            if status == "ok":
+                                ok(f"{action}: ok")
+                            else:
+                                failures += 1
+                                fail(f"interactions.{action}: status={status!r}")
+
+                        read_back = await _call(
+                            mcp,
+                            "get_recipe_details",
+                            recipe_id=recipe_id_for_lookup,
+                            include_interactions=True,
+                        )
+                        inter_after = read_back.get("interactions") or {}
+                        if inter_after.get("own_rating") == 5:
+                            ok("own rating reads back as 5")
+                        else:
+                            failures += 1
+                            fail(
+                                f"own rating read-back shows "
+                                f"{inter_after.get('own_rating')!r} instead of 5"
+                            )
+                        if inter_after.get("note") == smoke_note:
+                            ok("note reads back verbatim")
+                        else:
+                            failures += 1
+                            fail(
+                                f"note read-back shows {inter_after.get('note')!r} "
+                                f"instead of the smoke note"
+                            )
+
+                        revert = await _call(
+                            mcp,
+                            "set_recipe_interactions",
+                            recipe_id=recipe_id_for_lookup,
+                            bookmarked=False,
+                            note="",
+                        )
+                        if revert.get("bookmark") == "ok" and revert.get("note") == "ok":
+                            ok("bookmark + note reverted")
+                        else:
+                            failures += 1
+                            fail(
+                                f"revert failed: bookmark={revert.get('bookmark')!r} "
+                                f"note={revert.get('note')!r}"
+                            )
+                    except Exception as e:
+                        failures += 1
+                        fail(f"recipe interactions cycle raised: {e!r}")
+                else:
+                    warn("no recipe ID — skipping interactions write test")
+
                 section("WRITE: clone_recipe_as_custom")
                 try:
                     cloned = await _call(
@@ -780,6 +1182,38 @@ async def main() -> int:
                         fail(f"add_custom_recipes_to_calendar raised: {e!r}")
                 else:
                     warn("no uploaded custom recipe available — skipping custom calendar test")
+
+                section("WRITE: calendar-range shopping list (2099-01-01)")
+                # Both a regular and a custom recipe are planned on the test
+                # day at this point; the range mode must pick up both. The
+                # added ingredients are removed right away.
+                if planned_calendar_day is not None:
+                    try:
+                        range_msg = await _call(
+                            mcp,
+                            "add_recipes_to_shopping_list",
+                            from_date=FUTURE_TEST_DAY,
+                            to_date=FUTURE_TEST_DAY,
+                        )
+                        ok(f"calendar-range add returned: {range_msg!r}")
+                        if planned_calendar_recipe_id is not None:
+                            await _call(
+                                mcp,
+                                "remove_recipes_from_shopping_list",
+                                recipe_ids=[planned_calendar_recipe_id],
+                            )
+                        if planned_custom_calendar_recipe_id is not None:
+                            await _call(
+                                mcp,
+                                "remove_custom_recipes_from_shopping_list",
+                                recipe_ids=[planned_custom_calendar_recipe_id],
+                            )
+                        ok("range-added ingredients removed again")
+                    except Exception as e:
+                        failures += 1
+                        fail(f"calendar-range shopping cycle raised: {e!r}")
+                else:
+                    warn("no planned calendar day — skipping calendar-range shopping test")
 
                 section("Cleanup (always runs)")
                 # Cleanup goes through the MCP protocol just like the writes

@@ -32,9 +32,13 @@ class _Model(BaseModel):
 
 
 class UserProfile(_Model):
+    id: str = Field(min_length=1)
     username: str
     description: str | None = None
     picture: str | None = None
+    # Populated only when the caller asks for it (extra upstream calls).
+    devices: list[str] = Field(default_factory=list)
+    accessories: list[str] = Field(default_factory=list)
 
 
 class Subscription(_Model):
@@ -57,6 +61,72 @@ class Ingredient(_Model):
     description: str | None = None
 
 
+class NutritionValue(_Model):
+    type: str
+    value: float
+    unit: str
+
+
+class NutritionInfo(_Model):
+    """Nutrition values for one serving quantity (e.g. 'per portion')."""
+
+    group: str = ""
+    quantity: int | None = None
+    unit_notation: str | None = None
+    values: list[NutritionValue] = Field(default_factory=list)
+
+
+class RecipeCategory(_Model):
+    id: str = Field(min_length=1)
+    name: str
+    notes: str | None = None
+
+
+class RecipeCollectionRef(_Model):
+    """Reference to a collection a recipe belongs to."""
+
+    id: str = Field(min_length=1)
+    name: str
+    total_recipes: int = 0
+
+
+class RecipeInteractions(_Model):
+    """The user's relationship with a recipe: own rating, community rating, note.
+
+    Fields are ``None`` when the respective upstream endpoint had no data or
+    failed — a partial answer is more useful than no answer.
+    """
+
+    recipe_id: str = Field(min_length=1)
+    own_rating: int | None = Field(default=None, ge=1, le=5)
+    average_rating: float | None = None
+    number_of_ratings: int | None = None
+    note: str | None = None
+
+
+class RecipeInteractionResult(_Model):
+    """Per-action outcome of ``set_recipe_interactions``.
+
+    Each field is ``None`` when the action was not requested, ``"ok"`` on
+    success, or ``"failed: …"`` with the error — one failing endpoint must
+    not roll back or mask the others.
+    """
+
+    recipe_id: str = Field(min_length=1)
+    rating: str | None = None
+    bookmark: str | None = None
+    note: str | None = None
+    cooked: str | None = None
+
+
+class RecipeImage(_Model):
+    """One recipe photo in its three orientation variants."""
+
+    square: str | None = None
+    portrait: str | None = None
+    landscape: str | None = None
+
+
 class RecipeDetails(_Model):
     id: str = Field(min_length=1)
     name: str
@@ -73,6 +143,12 @@ class RecipeDetails(_Model):
     utensils: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     ingredients: list[Ingredient] = Field(default_factory=list)
+    categories: list[RecipeCategory] = Field(default_factory=list)
+    collections: list[RecipeCollectionRef] = Field(default_factory=list)
+    nutrition: list[NutritionInfo] = Field(default_factory=list)
+    # Populated only when the caller asks for it (extra upstream calls).
+    interactions: RecipeInteractions | None = None
+    images: list[RecipeImage] = Field(default_factory=list)
 
 
 class CustomRecipeSummary(_Model):
@@ -105,6 +181,15 @@ class CollectionSummary(_Model):
     recipe_count: int = 0
 
 
+class CollectionPage(_Model):
+    """One page of collection listings plus pagination metadata."""
+
+    items: list[CollectionSummary] = Field(default_factory=list)
+    page: int = Field(default=0, ge=0)
+    total_pages: int = Field(default=0, ge=0)
+    total_elements: int = Field(default=0, ge=0)
+
+
 class ShoppingListItem(_Model):
     id: str = Field(min_length=1)
     name: str
@@ -113,9 +198,29 @@ class ShoppingListItem(_Model):
     source: ShoppingItemSource
 
 
+class ShoppingListRecipe(_Model):
+    """A recipe whose ingredients are currently on the shopping list."""
+
+    id: str = Field(min_length=1)
+    name: str
+    url: str
+    thumbnail: str | None = None
+    image: str | None = None
+    ingredients: list[Ingredient] = Field(default_factory=list)
+
+
 class ShoppingList(_Model):
     ingredient_items: list[ShoppingListItem] = Field(default_factory=list)
     additional_items: list[ShoppingListItem] = Field(default_factory=list)
+    recipes: list[ShoppingListRecipe] = Field(default_factory=list)
+
+
+class CalendarShoppingSummary(_Model):
+    """Result of pushing a calendar date range onto the shopping list."""
+
+    recipe_ids: list[str] = Field(default_factory=list)
+    custom_recipe_ids: list[str] = Field(default_factory=list)
+    item_count: int = Field(default=0, ge=0)
 
 
 class CalendarRecipe(_Model):
@@ -222,6 +327,15 @@ class UploadResult(_Model):
     quality: QualityReport
 
 
+class CustomRecipeImageResult(_Model):
+    """Outcome of ``set_custom_recipe_image``."""
+
+    recipe_id: str = Field(min_length=1)
+    image: str | None = None
+    thumbnail: str | None = None
+    url: str
+
+
 class ShoppingItemOwnershipUpdate(_Model):
     """Pair of (item id, new owned/checked state) used by the ownership tools."""
 
@@ -245,6 +359,13 @@ class RecipeSearchResult(_Model):
     number_of_ratings: int | None = None
     total_time_seconds: int | None = None
     image: str | None = None
+
+
+class CookedRecipe(_Model):
+    """One cooking-history entry."""
+
+    cooked_at: str | None = None
+    recipe: RecipeSearchResult
 
 
 class RecipeSuggestion(_Model):

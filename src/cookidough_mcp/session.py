@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import time
 from contextlib import asynccontextmanager, suppress
-from datetime import date
+from datetime import date, timedelta
+from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Protocol, Self
 from urllib.parse import quote, quote_plus, urlencode, urlsplit
@@ -17,6 +20,7 @@ from aiohttp import (
     ClientSession,
     ClientTimeout,
     CookieJar,
+    FormData,
     TCPConnector,
 )
 from cookidoo_api import (
@@ -26,6 +30,7 @@ from cookidoo_api import (
 )
 from cookidoo_api.exceptions import (
     CookidooAuthException,
+    CookidooConfigException,
     CookidooException,
     CookidooParseException,
     CookidooRequestException,
@@ -34,23 +39,39 @@ from cookidoo_api.exceptions import (
 from .annotation_models import StepAnnotation
 from .annotations import AnnotationInferrer
 from .constants import (
+    CLOUDINARY_API_KEY,
+    CLOUDINARY_UPLOAD_PRESET,
+    CLOUDINARY_UPLOAD_SOURCE,
+    CLOUDINARY_UPLOAD_URL,
     CUSTOM_RECIPE_OPERATION_TIMEOUT_SECONDS,
     CUSTOM_RECIPE_PROPAGATION_DELAY_SECONDS,
     HTTP_TIMEOUT_SECONDS,
+    MAX_RECIPE_IMAGE_BYTES,
     SUGGEST_MIN_INGREDIENT_LENGTH,
     SUGGEST_RECIPE_FETCH_CONCURRENCY,
+    SUGGEST_SEARCH_CANDIDATE_FACTOR,
 )
 from .errors import AuthenticationError, NotFoundError, UpstreamApiError
 from .models import (
     AdditionalItemRename,
     CalendarDay,
     CalendarRecipe,
+    CalendarShoppingSummary,
+    CollectionPage,
     CollectionSummary,
+    CookedRecipe,
     CustomRecipeDetails,
     CustomRecipeDraft,
+    CustomRecipeImageResult,
     CustomRecipeSummary,
     Ingredient,
+    NutritionInfo,
+    NutritionValue,
+    RecipeCategory,
+    RecipeCollectionRef,
     RecipeDetails,
+    RecipeImage,
+    RecipeInteractions,
     RecipeSearchResult,
     RecipeStep,
     RecipeSuggestion,
@@ -58,6 +79,7 @@ from .models import (
     ShoppingItemSource,
     ShoppingList,
     ShoppingListItem,
+    ShoppingListRecipe,
     Subscription,
     UserProfile,
 )
@@ -89,11 +111,11 @@ _EMAIL_REDACT_PATTERN = re.compile(r"[\w.+-]+@[\w.-]+")
 _ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
 
 
-class CookidooSessionProtocol(Protocol):
+class CookidoughSessionProtocol(Protocol):
     """Public surface of the Cookidoo session used by tools and tests.
 
     Lifecycle methods (``__aenter__``/``__aexit__``) live on the concrete
-    `CookidooSession` only; the lifespan in `server.build_server` calls
+    `CookidoughSession` only; the lifespan in `server.build_server` calls
     `aclose` directly, so the protocol covers exactly the surface that tools
     consume.
     """
@@ -101,11 +123,12 @@ class CookidooSessionProtocol(Protocol):
     async def get_user_profile(self) -> UserProfile: ...
     async def get_subscription(self) -> Subscription | None: ...
     async def get_recipe_details(self, recipe_id: str) -> RecipeDetails: ...
+    async def get_recipe_images(self, recipe_id: str) -> list[RecipeImage]: ...
     async def get_custom_recipe_details(self, recipe_id: str) -> CustomRecipeDetails: ...
-    async def list_managed_collections(self, page: int = 0) -> list[CollectionSummary]: ...
+    async def list_managed_collections(self, page: int = 0) -> CollectionPage: ...
     async def add_managed_collection(self, collection_id: str) -> CollectionSummary: ...
     async def remove_managed_collection(self, collection_id: str) -> None: ...
-    async def list_custom_collections(self, page: int = 0) -> list[CollectionSummary]: ...
+    async def list_custom_collections(self, page: int = 0) -> CollectionPage: ...
     async def create_custom_collection(self, name: str) -> CollectionSummary: ...
     async def delete_custom_collection(self, collection_id: str) -> None: ...
     async def add_recipes_to_custom_collection(
@@ -131,6 +154,12 @@ class CookidooSessionProtocol(Protocol):
     ) -> CalendarDay: ...
     async def list_custom_recipes(self) -> list[CustomRecipeSummary]: ...
     async def upload_custom_recipe(self, draft: CustomRecipeDraft) -> tuple[str, str]: ...
+    async def update_custom_recipe(
+        self, recipe_id: str, draft: CustomRecipeDraft
+    ) -> tuple[str, str]: ...
+    async def set_custom_recipe_image(
+        self, recipe_id: str, image_source: str
+    ) -> CustomRecipeImageResult: ...
     async def delete_custom_recipe(self, recipe_id: str) -> None: ...
     async def clone_recipe_as_custom(
         self, recipe_id: str, serving_size: int
@@ -146,17 +175,46 @@ class CookidooSessionProtocol(Protocol):
     async def rename_additional_items(
         self, updates: list[AdditionalItemRename]
     ) -> list[ShoppingListItem]: ...
-    async def search_recipes(self, query: str, limit: int = 10) -> list[RecipeSearchResult]: ...
+    async def search_recipes(
+        self,
+        query: str,
+        limit: int = 10,
+        *,
+        max_total_minutes: int | None = None,
+        difficulty: str | None = None,
+        categories: list[str] | None = None,
+        ingredients: list[str] | None = None,
+        exclude_ingredients: list[str] | None = None,
+        min_rating: float | None = None,
+        portions: int | None = None,
+        thermomix_version: str | None = None,
+        accessories: list[str] | None = None,
+        sort_by: str | None = None,
+    ) -> list[RecipeSearchResult]: ...
     async def suggest_recipes_from_ingredients(
         self,
         available_ingredients: list[str],
         collection_ids: list[str] | None = None,
         max_results: int = 10,
     ) -> list[RecipeSuggestion]: ...
+    async def add_calendar_range_to_shopping_list(
+        self, start: date, end: date
+    ) -> CalendarShoppingSummary: ...
+    async def rate_recipe(self, recipe_id: str, stars: int) -> None: ...
+    async def set_recipe_bookmark(self, recipe_id: str, bookmarked: bool) -> None: ...
+    async def set_recipe_note(self, recipe_id: str, text: str | None) -> None: ...
+    async def mark_recipe_cooked(self, recipe_id: str, is_custom: bool = False) -> None: ...
+    async def get_cooking_history(self, limit: int = 20) -> list[CookedRecipe]: ...
+    async def get_recipe_interactions(self, recipe_id: str) -> RecipeInteractions: ...
+    async def get_recipe_recommendations(
+        self, recipe_id: str | None = None, limit: int = 10
+    ) -> list[RecipeSearchResult]: ...
+    async def list_bookmarked_recipes(self) -> list[RecipeSearchResult]: ...
+    async def get_user_devices(self) -> tuple[list[str], list[str]]: ...
     async def aclose(self) -> None: ...
 
 
-class CookidooSession:
+class CookidoughSession:
     """High-level repository for the Cookidoo platform.
 
     Tools should always go through this class. The underlying ``cookidoo-api``
@@ -256,7 +314,13 @@ class CookidooSession:
                     localization=options[0],
                 )
                 client = Cookidoo(session=http, cfg=config)
-                await client.login()
+                if self._try_load_cookies(client):
+                    # A stale cookie set 401s on the first real call and
+                    # ``_relogin`` recovers from there.
+                    _LOGGER.info("Restored Cookidoo session cookies; skipping login.")
+                else:
+                    await client.login()
+                    self._persist_cookies(client)
             except CookidooAuthException as e:
                 await http.close()
                 raise AuthenticationError(str(e)) from e
@@ -303,8 +367,38 @@ class CookidooSession:
                 raise AuthenticationError(str(e)) from e
             except CookidooException as e:
                 raise UpstreamApiError(str(e)) from e
+            self._persist_cookies(client)
             self._session_generation += 1
             return client
+
+    def _try_load_cookies(self, client: Cookidoo) -> bool:
+        """Restore session cookies from disk; True when they carry a login."""
+        path = self._settings.cookies_file
+        if path is None or not path.is_file():
+            return False
+        try:
+            client.load_cookies(path)
+        except CookidooConfigException as e:
+            _LOGGER.warning("Ignoring unreadable cookie file %s: %s", path, e)
+            return False
+        # ``load_cookies`` flips the client's private login flag only when
+        # the required auth cookies were actually present in the file. A
+        # file without them must fall through to a fresh login instead of
+        # producing a guaranteed 401 on the first call.
+        return bool(getattr(client, "_logged_in", False))
+
+    def _persist_cookies(self, client: Cookidoo) -> None:
+        path = self._settings.cookies_file
+        if path is None:
+            return
+        try:
+            client.save_cookies(path)
+            # The file holds live session credentials — owner-only access.
+            path.chmod(0o600)
+        except OSError as e:
+            # Persisting is an optimization; a read-only directory must
+            # never break the login itself.
+            _LOGGER.warning("Could not persist Cookidoo cookies to %s: %s", path, e)
 
     async def _run[T](self, op: Callable[[Cookidoo], Awaitable[T]]) -> T:
         client = await self._ensure_logged_in()
@@ -332,6 +426,7 @@ class CookidooSession:
     async def get_user_profile(self) -> UserProfile:
         info = await self._run(lambda c: c.get_user_info())
         return UserProfile(
+            id=info.id,
             username=info.username,
             description=info.description,
             picture=info.picture,
@@ -376,7 +471,39 @@ class CookidooSession:
                 Ingredient(id=i.id, name=i.name, description=getattr(i, "description", None))
                 for i in details.ingredients
             ],
+            # ``getattr`` with empty defaults keeps pre-0.15 cookidoo-api
+            # payload shapes (and slim test fakes) from sinking the request.
+            categories=[
+                RecipeCategory(id=c.id, name=c.name, notes=getattr(c, "notes", None) or None)
+                for c in getattr(details, "categories", []) or []
+            ],
+            collections=[
+                RecipeCollectionRef(
+                    id=col.id,
+                    name=col.name,
+                    total_recipes=getattr(col, "total_recipes", 0) or 0,
+                )
+                for col in getattr(details, "collections", []) or []
+            ],
+            nutrition=_nutrition_to_dtos(getattr(details, "nutrition_groups", []) or []),
         )
+
+    async def get_recipe_images(self, recipe_id: str) -> list[RecipeImage]:
+        """Return every photo of a catalogue recipe (recipes carry several).
+
+        cookidoo-api keeps only the first asset, so this reads the raw
+        recipe payload through the same endpoint the library uses.
+        """
+        client = await self._ensure_logged_in()
+        localization = client.localization
+        language_path = quote(localization.language, safe="")
+        url = (
+            f"{_localization_origin(localization.url)}"
+            f"/recipes/recipe/{language_path}/{quote(recipe_id, safe='')}"
+        )
+        async with self._authed_http("GET", url) as response:
+            payload = await _parse_json(response)
+        return _recipe_images_from_payload(payload)
 
     async def get_custom_recipe_details(self, recipe_id: str) -> CustomRecipeDetails:
         try:
@@ -397,9 +524,19 @@ class CookidooSession:
             image=recipe.image,
         )
 
-    async def list_managed_collections(self, page: int = 0) -> list[CollectionSummary]:
-        collections = await self._run(lambda c: c.get_managed_collections(page=page))
-        return [_collection_to_dto(item) for item in collections]
+    async def list_managed_collections(self, page: int = 0) -> CollectionPage:
+        # The count call rides alongside the page fetch so pagination
+        # metadata is consistent on every page without extra wall-clock cost.
+        collections, (total_elements, total_pages) = await asyncio.gather(
+            self._run(lambda c: c.get_managed_collections(page=page)),
+            self._run(lambda c: c.count_managed_collections()),
+        )
+        return CollectionPage(
+            items=[_collection_to_dto(item) for item in collections],
+            page=page,
+            total_pages=total_pages,
+            total_elements=total_elements,
+        )
 
     async def add_managed_collection(self, collection_id: str) -> CollectionSummary:
         collection = await self._run(lambda c: c.add_managed_collection(collection_id))
@@ -408,9 +545,17 @@ class CookidooSession:
     async def remove_managed_collection(self, collection_id: str) -> None:
         await self._run(lambda c: c.remove_managed_collection(collection_id))
 
-    async def list_custom_collections(self, page: int = 0) -> list[CollectionSummary]:
-        collections = await self._run(lambda c: c.get_custom_collections(page=page))
-        return [_collection_to_dto(item) for item in collections]
+    async def list_custom_collections(self, page: int = 0) -> CollectionPage:
+        collections, (total_elements, total_pages) = await asyncio.gather(
+            self._run(lambda c: c.get_custom_collections(page=page)),
+            self._run(lambda c: c.count_custom_collections()),
+        )
+        return CollectionPage(
+            items=[_collection_to_dto(item) for item in collections],
+            page=page,
+            total_pages=total_pages,
+            total_elements=total_elements,
+        )
 
     async def create_custom_collection(self, name: str) -> CollectionSummary:
         collection = await self._run(lambda c: c.add_custom_collection(name))
@@ -433,9 +578,10 @@ class CookidooSession:
         await self._run(lambda c: c.remove_recipe_from_custom_collection(collection_id, recipe_id))
 
     async def get_shopping_list(self) -> ShoppingList:
-        ingredients, additional = await asyncio.gather(
+        ingredients, additional, recipes = await asyncio.gather(
             self._run(lambda c: c.get_ingredient_items()),
             self._run(lambda c: c.get_additional_items()),
+            self._run(lambda c: c.get_shopping_list_recipes()),
         )
         return ShoppingList(
             ingredient_items=[
@@ -457,6 +603,22 @@ class CookidooSession:
                     source=ShoppingItemSource.ADDITIONAL,
                 )
                 for item in additional
+            ],
+            recipes=[
+                ShoppingListRecipe(
+                    id=r.id,
+                    name=r.name,
+                    url=r.url,
+                    thumbnail=r.thumbnail,
+                    image=r.image,
+                    ingredients=[
+                        Ingredient(
+                            id=i.id, name=i.name, description=getattr(i, "description", None)
+                        )
+                        for i in r.ingredients
+                    ],
+                )
+                for r in recipes
             ],
         )
 
@@ -592,7 +754,22 @@ class CookidooSession:
             image=recipe.image,
         )
 
-    async def search_recipes(self, query: str, limit: int = 10) -> list[RecipeSearchResult]:
+    async def search_recipes(
+        self,
+        query: str,
+        limit: int = 10,
+        *,
+        max_total_minutes: int | None = None,
+        difficulty: str | None = None,
+        categories: list[str] | None = None,
+        ingredients: list[str] | None = None,
+        exclude_ingredients: list[str] | None = None,
+        min_rating: float | None = None,
+        portions: int | None = None,
+        thermomix_version: str | None = None,
+        accessories: list[str] | None = None,
+        sort_by: str | None = None,
+    ) -> list[RecipeSearchResult]:
         limit = max(1, min(limit, 50))
         client = await self._ensure_logged_in()
         localization = client.localization
@@ -607,15 +784,36 @@ class CookidooSession:
         # it, ``"A+B Sauce"`` would be forwarded as ``"A B Sauce"`` because
         # the upstream decodes ``+`` as a space.
         language_path = quote(localization.language, safe="")
-        params = urlencode(
-            {
-                "query": query,
-                "context": "recipes",
-                "countries": localization.country_code,
-                "limit": limit,
-            },
-            quote_via=quote_plus,
-        )
+        query_params: dict[str, Any] = {
+            "query": query,
+            "context": "recipes",
+            "countries": localization.country_code,
+            "limit": limit,
+        }
+        # Filter params mirror the Cookidoo web UI's /search query string:
+        # totalTime in seconds, list values comma-joined, unset filters
+        # omitted entirely.
+        if max_total_minutes is not None:
+            query_params["totalTime"] = max(1, max_total_minutes) * 60
+        if difficulty is not None:
+            query_params["difficulty"] = difficulty
+        if categories:
+            query_params["categories"] = ",".join(categories)
+        if ingredients:
+            query_params["ingredients"] = ",".join(ingredients)
+        if exclude_ingredients:
+            query_params["excludeIngredients"] = ",".join(exclude_ingredients)
+        if min_rating is not None:
+            query_params["ratings"] = int(min_rating)
+        if portions is not None:
+            query_params["portions"] = portions
+        if thermomix_version is not None:
+            query_params["tmv"] = thermomix_version
+        if accessories:
+            query_params["accessories"] = ",".join(accessories)
+        if sort_by is not None:
+            query_params["sortby"] = sort_by
+        params = urlencode(query_params, quote_via=quote_plus)
         url = f"{origin}/search/{language_path}?{params}"
         async with self._authed_http("GET", url) as response:
             payload = await _parse_json(response)
@@ -642,7 +840,16 @@ class CookidooSession:
         if not available_lower:
             return []
 
-        recipe_ids = await self._collect_recipe_ids(collection_ids)
+        if collection_ids is None:
+            recipe_ids = await self._search_candidate_recipe_ids(available_lower, max_results)
+            if not recipe_ids:
+                # The ingredients filter is an undocumented search feature;
+                # if it yields nothing, fall back to the user's own
+                # collections so the tool never regresses below the old
+                # behaviour.
+                recipe_ids = await self._collect_recipe_ids(None)
+        else:
+            recipe_ids = await self._collect_recipe_ids(collection_ids)
         if not recipe_ids:
             return []
 
@@ -687,6 +894,67 @@ class CookidooSession:
 
         suggestions.sort(key=lambda s: s.score, reverse=True)
         return suggestions[:max_results]
+
+    async def _search_candidate_recipe_ids(
+        self, available_lower: set[str], max_results: int
+    ) -> list[str]:
+        candidate_limit = min(max(max_results * SUGGEST_SEARCH_CANDIDATE_FACTOR, 10), 50)
+        sorted_ingredients = sorted(available_lower)
+        results = await self.search_recipes(
+            query=" ".join(sorted_ingredients),
+            limit=candidate_limit,
+            ingredients=sorted_ingredients,
+        )
+        return [r.id for r in results]
+
+    async def add_calendar_range_to_shopping_list(
+        self, start: date, end: date
+    ) -> CalendarShoppingSummary:
+        # ``get_calendar_week`` returns whole weeks; probing every 7 days
+        # (plus the end date, whose week the stride can overshoot) covers the
+        # range with the minimum number of calls. Days are deduplicated by id
+        # because adjacent probes may resolve to the same week.
+        probe_days = [start]
+        cursor = start + timedelta(days=7)
+        while cursor <= end:
+            probe_days.append(cursor)
+            cursor += timedelta(days=7)
+        if probe_days[-1] != end:
+            probe_days.append(end)
+        weeks = await asyncio.gather(*(self.get_calendar_week(d) for d in probe_days))
+
+        seen_days: dict[str, CalendarDay] = {}
+        for week in weeks:
+            for calendar_day in week:
+                seen_days.setdefault(calendar_day.id, calendar_day)
+
+        recipe_ids: dict[str, None] = {}
+        custom_ids: dict[str, None] = {}
+        for calendar_day in seen_days.values():
+            day_date = _coerce_iso_date(calendar_day.id)
+            if day_date is None:
+                # Upstream day ids are ISO dates today. If that ever changes
+                # we must not blindly push recipes outside the requested
+                # range onto the list — this is a write operation.
+                _LOGGER.debug("Skipping calendar day with non-date id %r", calendar_day.id)
+                continue
+            if not start <= day_date <= end:
+                continue
+            for recipe in calendar_day.recipes:
+                recipe_ids.setdefault(recipe.id, None)
+            for custom_id in calendar_day.custom_recipe_ids:
+                custom_ids.setdefault(custom_id, None)
+
+        item_count = 0
+        if recipe_ids:
+            item_count += await self.add_recipes_to_shopping_list(list(recipe_ids))
+        if custom_ids:
+            item_count += await self.add_custom_recipes_to_shopping_list(list(custom_ids))
+        return CalendarShoppingSummary(
+            recipe_ids=list(recipe_ids),
+            custom_recipe_ids=list(custom_ids),
+            item_count=item_count,
+        )
 
     async def _collect_recipe_ids(self, collection_ids: list[str] | None) -> list[str]:
         """Resolve a list of collection IDs (or every collection) to recipe IDs.
@@ -807,6 +1075,99 @@ class CookidooSession:
         public_url = await self._custom_recipe_public_url(recipe_id)
         return recipe_id, public_url
 
+    async def update_custom_recipe(
+        self, recipe_id: str, draft: CustomRecipeDraft
+    ) -> tuple[str, str]:
+        """Replace an existing custom recipe's content (full overwrite).
+
+        Reuses the same PATCH the create flow runs after its stub POST. No
+        rollback: the recipe already exists, so a failed PATCH leaves the
+        previous server state instead of orphaning a stub.
+        """
+        _LOGGER.info(
+            "update_custom_recipe: PATCHing %s (name=%r, %d ingredients, %d steps)",
+            recipe_id,
+            draft.name,
+            len(draft.ingredients),
+            len(draft.steps),
+        )
+        try:
+            await asyncio.wait_for(
+                self._patch_custom_recipe(recipe_id, draft),
+                timeout=CUSTOM_RECIPE_OPERATION_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as e:
+            raise UpstreamApiError(
+                f"Custom recipe update timed out after "
+                f"{CUSTOM_RECIPE_OPERATION_TIMEOUT_SECONDS:.0f} s; the recipe "
+                f"{recipe_id!r} may be partially updated — verify it in the Cookidoo UI."
+            ) from e
+        public_url = await self._custom_recipe_public_url(recipe_id)
+        return recipe_id, public_url
+
+    async def set_custom_recipe_image(
+        self, recipe_id: str, image_source: str
+    ) -> CustomRecipeImageResult:
+        """Upload a photo for a custom recipe (path or http(s) URL).
+
+        Flow verified live (2026-06-05): Cookidoo signs the upload params,
+        the file goes directly to Vorwerk's Cloudinary tenant, and the
+        returned public id is PATCHed onto the recipe. Each upload yields a
+        fresh asset — Cookidoo rejects reusing an asset across recipes.
+        """
+        image_bytes, content_type = await self._load_image_bytes(image_source)
+        timestamp = int(time.time())
+        signature = await self._request_image_signature(timestamp)
+        public_id, image_format = await _upload_image_to_cloudinary(
+            image_bytes, content_type, timestamp, signature
+        )
+        url = f"{await self._custom_recipes_url()}/{quote(recipe_id, safe='')}"
+        body = {"image": f"{public_id}.{image_format}", "isImageOwnedByUser": True}
+        async with self._authed_http("PATCH", url, json_body=body) as response:
+            await response.read()
+        details = await self.get_custom_recipe_details(recipe_id)
+        return CustomRecipeImageResult(
+            recipe_id=recipe_id,
+            image=details.image,
+            thumbnail=details.thumbnail,
+            url=details.url,
+        )
+
+    async def _request_image_signature(self, timestamp: int) -> str:
+        client = await self._ensure_logged_in()
+        localization = client.localization
+        language_path = quote(localization.language, safe="")
+        url = (
+            f"{_localization_origin(localization.url)}"
+            f"/created-recipes/{language_path}/image/signature"
+        )
+        body = {
+            "timestamp": timestamp,
+            "upload_preset": CLOUDINARY_UPLOAD_PRESET,
+            "source": CLOUDINARY_UPLOAD_SOURCE,
+        }
+        async with self._authed_http("POST", url, json_body=body) as response:
+            payload = await _parse_json(response)
+        signature = payload.get("signature") if isinstance(payload, dict) else None
+        if not isinstance(signature, str) or not signature:
+            raise UpstreamApiError("Cookidoo did not return an image upload signature.")
+        return signature
+
+    async def _load_image_bytes(self, image_source: str) -> tuple[bytes, str]:
+        scheme = urlsplit(image_source).scheme.lower()
+        if scheme in _ALLOWED_URL_SCHEMES:
+            image_bytes = await _fetch_image_url(image_source)
+        elif scheme in ("", "file"):
+            image_bytes = await asyncio.to_thread(
+                _read_image_file, image_source.removeprefix("file://")
+            )
+        else:
+            raise ValueError(f"Unsupported image source scheme: {scheme!r}")
+        content_type = _sniff_image_type(image_bytes)
+        if content_type is None:
+            raise ValueError("Image must be JPEG or PNG (content sniffing failed).")
+        return image_bytes, content_type
+
     async def delete_custom_recipe(self, recipe_id: str) -> None:
         await self._run(lambda c: c.remove_custom_recipe(recipe_id))
 
@@ -833,6 +1194,148 @@ class CookidooSession:
         # original failure must still be surfaced to the caller.
         with suppress(CookidooException, UpstreamApiError, AuthenticationError):
             await self.delete_custom_recipe(recipe_id)
+
+    # Recipe interactions: undocumented Cookidoo endpoints, not exposed by
+    # cookidoo-api. Methods and payload shapes verified against the live API
+    # (2026-06-05); parsers stay tolerant so an upstream change degrades a
+    # single value instead of the whole call.
+
+    async def rate_recipe(self, recipe_id: str, stars: int) -> None:
+        stars = max(1, min(stars, 5))
+        url = await self._rating_url(f"user-ratings/recipes/{quote(recipe_id, safe='')}")
+        async with self._authed_http("PUT", url, json_body={"rating": stars}) as response:
+            await response.read()
+
+    async def set_recipe_bookmark(self, recipe_id: str, bookmarked: bool) -> None:
+        url = await self._organize_url("api/bookmark")
+        method = "PUT" if bookmarked else "DELETE"
+        async with self._authed_http(method, url, json_body={"recipeId": recipe_id}) as response:
+            await response.read()
+
+    async def set_recipe_note(self, recipe_id: str, text: str | None) -> None:
+        item_url = await self._recipe_notes_url(f"recipes/{quote(recipe_id, safe='')}")
+        if text is None or not text.strip():
+            # Idempotent delete: a 404 means there was no note to begin with.
+            with suppress(NotFoundError):
+                async with self._authed_http("DELETE", item_url) as response:
+                    await response.read()
+            return
+        try:
+            async with self._authed_http("PUT", item_url, json_body={"text": text}) as response:
+                await response.read()
+        except NotFoundError:
+            create_url = await self._recipe_notes_url("recipes")
+            body = {"recipeId": recipe_id, "text": text}
+            async with self._authed_http("POST", create_url, json_body=body) as response:
+                await response.read()
+
+    async def mark_recipe_cooked(self, recipe_id: str, is_custom: bool = False) -> None:
+        url = await self._organize_url("api/cooking-history")
+        # Upstream validates recipeType against ^(VorwerkRecipe|CreatedRecipe)$.
+        recipe_type = "CreatedRecipe" if is_custom else "VorwerkRecipe"
+        body = {"recipeId": recipe_id, "recipeType": recipe_type}
+        async with self._authed_http("POST", url, json_body=body) as response:
+            await response.read()
+
+    async def get_cooking_history(self, limit: int = 20) -> list[CookedRecipe]:
+        limit = max(1, min(limit, 100))
+        url = await self._organize_url("api/cooking-history")
+        async with self._authed_http("GET", url) as response:
+            payload = await _parse_json(response)
+        return _cooking_history_from_payload(payload)[:limit]
+
+    async def get_recipe_interactions(self, recipe_id: str) -> RecipeInteractions:
+        encoded_id = quote(recipe_id, safe="")
+        own_url = await self._rating_url(f"user-ratings/recipes/{encoded_id}")
+        community_url = await self._rating_url(f"aggregated-ratings/recipes/{encoded_id}")
+        note_url = await self._recipe_notes_url(f"recipes/{encoded_id}")
+        own, community, note = await asyncio.gather(
+            self._quiet_json("GET", own_url),
+            self._quiet_json("GET", community_url),
+            self._quiet_json("GET", note_url),
+        )
+        average, count = _aggregated_rating_from_payload(community)
+        return RecipeInteractions(
+            recipe_id=recipe_id,
+            own_rating=_own_rating_from_payload(own),
+            average_rating=average,
+            number_of_ratings=count,
+            note=_note_text_from_payload(note),
+        )
+
+    async def get_recipe_recommendations(
+        self, recipe_id: str | None = None, limit: int = 10
+    ) -> list[RecipeSearchResult]:
+        limit = max(1, min(limit, 50))
+        client = await self._ensure_logged_in()
+        localization = client.localization
+        origin = _localization_origin(localization.url)
+        if recipe_id is None:
+            language_path = quote(localization.language, safe="")
+            url = f"{origin}/recommender/web/{language_path}/foryou"
+        else:
+            # The similar-recipes endpoint has no language segment.
+            url = f"{origin}/recommender/mobile/simrec/{quote(recipe_id, safe='')}"
+        async with self._authed_http("GET", url) as response:
+            payload = await _parse_json(response)
+        items = _recommendation_items_from_payload(payload)
+        return items[:limit]
+
+    async def list_bookmarked_recipes(self) -> list[RecipeSearchResult]:
+        # The my-recipes page only serves HTML; this endpoint returns JSON.
+        url = await self._organize_url("api/bookmark")
+        async with self._authed_http("GET", url) as response:
+            payload = await _parse_json(response)
+        return _recommendation_items_from_payload(payload)
+
+    async def get_user_devices(self) -> tuple[list[str], list[str]]:
+        """Return ``(devices, accessories)`` linked to the account.
+
+        Both lists degrade to empty on upstream failure — device info is
+        profile garnish, not worth failing the whole profile call over.
+        """
+        client = await self._ensure_logged_in()
+        origin = _localization_origin(client.localization.url)
+        devices_payload, accessories_payload = await asyncio.gather(
+            self._quiet_json("GET", f"{origin}/customer-devices/api/my-devices/versions"),
+            self._quiet_json("GET", f"{origin}/customer-devices/api/accessory/ids"),
+        )
+        return (
+            _device_names_from_payload(devices_payload),
+            _device_names_from_payload(accessories_payload),
+        )
+
+    async def _quiet_json(self, method: str, url: str) -> Any:
+        """Fetch JSON, returning ``None`` instead of raising on 404/5xx.
+
+        Used where a missing sub-resource (no rating yet, no note yet) is a
+        normal answer, and where one failing endpoint must not sink a
+        gathered multi-endpoint read. Auth failures still propagate.
+        """
+        try:
+            async with self._authed_http(method, url) as response:
+                return await _parse_json(response)
+        except (NotFoundError, UpstreamApiError) as e:
+            _LOGGER.debug("Ignoring failed %s %s: %s", method, url, e)
+            return None
+
+    async def _organize_url(self, suffix: str) -> str:
+        client = await self._ensure_logged_in()
+        localization = client.localization
+        language_path = quote(localization.language, safe="")
+        return f"{_localization_origin(localization.url)}/organize/{language_path}/{suffix}"
+
+    async def _rating_url(self, suffix: str) -> str:
+        client = await self._ensure_logged_in()
+        localization = client.localization
+        language_path = quote(localization.language, safe="")
+        return f"{_localization_origin(localization.url)}/rating/{language_path}/{suffix}"
+
+    async def _recipe_notes_url(self, suffix: str) -> str:
+        client = await self._ensure_logged_in()
+        localization = client.localization
+        language_path = quote(localization.language, safe="")
+        return f"{_localization_origin(localization.url)}/recipe-notes/{language_path}/{suffix}"
 
     async def _custom_recipes_url(self) -> str:
         # Both URL helpers need ``localization`` from the upstream client.
@@ -908,6 +1411,89 @@ class CookidooSession:
             response.release()
 
 
+def _read_image_file(raw_path: str) -> bytes:
+    path = Path(raw_path).expanduser()
+    if not path.is_file():
+        raise ValueError(f"Image file not found: {raw_path!r}")
+    if path.stat().st_size > MAX_RECIPE_IMAGE_BYTES:
+        raise ValueError(f"Image exceeds {MAX_RECIPE_IMAGE_BYTES // (1024 * 1024)} MB.")
+    return path.read_bytes()
+
+
+def _sniff_image_type(image_bytes: bytes) -> str | None:
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    return None
+
+
+async def _fetch_image_url(url: str) -> bytes:
+    """Download an image over plain HTTP with a hard size cap.
+
+    Streams into the cap so a hostile or mislinked URL cannot exhaust
+    memory before the limit check.
+    """
+    try:
+        async with (
+            ClientSession(timeout=ClientTimeout(total=HTTP_TIMEOUT_SECONDS)) as plain,
+            plain.get(url) as response,
+        ):
+            if response.status >= 400:
+                raise UpstreamApiError(f"Image download failed with HTTP {response.status}.")
+            chunks: list[bytes] = []
+            received = 0
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                received += len(chunk)
+                if received > MAX_RECIPE_IMAGE_BYTES:
+                    raise ValueError(f"Image exceeds {MAX_RECIPE_IMAGE_BYTES // (1024 * 1024)} MB.")
+                chunks.append(chunk)
+            return b"".join(chunks)
+    except ClientError as e:
+        raise UpstreamApiError(f"Image download failed: {e}") from e
+
+
+async def _upload_image_to_cloudinary(
+    image_bytes: bytes, content_type: str, timestamp: int, signature: str
+) -> tuple[str, str]:
+    """Upload the image to Vorwerk's Cloudinary tenant; return (public_id, format).
+
+    Runs on a dedicated plain session — the Cookidoo cookie jar must never
+    reach a third-party host.
+    """
+    form = FormData()
+    form.add_field("upload_preset", CLOUDINARY_UPLOAD_PRESET)
+    form.add_field("source", CLOUDINARY_UPLOAD_SOURCE)
+    form.add_field("timestamp", str(timestamp))
+    form.add_field("signature", signature)
+    form.add_field("api_key", CLOUDINARY_API_KEY)
+    extension = "png" if content_type == "image/png" else "jpg"
+    form.add_field("file", image_bytes, filename=f"upload.{extension}", content_type=content_type)
+    try:
+        async with (
+            ClientSession(timeout=ClientTimeout(total=HTTP_TIMEOUT_SECONDS)) as plain,
+            plain.post(CLOUDINARY_UPLOAD_URL, data=form) as response,
+        ):
+            raw = await response.text()
+            if response.status >= 400:
+                raise UpstreamApiError(
+                    f"Image upload failed with HTTP {response.status}: {_redact_error_body(raw)}"
+                )
+    except ClientError as e:
+        raise UpstreamApiError(f"Image upload failed: {e}") from e
+    try:
+        payload = json.loads(raw)
+    except ValueError as e:
+        raise UpstreamApiError("Image upload returned a non-JSON payload.") from e
+    public_id = payload.get("public_id") if isinstance(payload, dict) else None
+    image_format = payload.get("format") if isinstance(payload, dict) else None
+    if not isinstance(public_id, str) or not public_id:
+        raise UpstreamApiError("Image upload did not return a usable public_id.")
+    if not isinstance(image_format, str) or not image_format:
+        raise UpstreamApiError("Image upload did not return the stored format.")
+    return public_id, image_format
+
+
 async def _safe_send(
     sender: Callable[[], Awaitable[ClientResponse]], method: str, url: str
 ) -> ClientResponse:
@@ -922,6 +1508,43 @@ async def _parse_json(response: ClientResponse) -> Any:
         return await response.json(content_type=None)
     except (ClientError, ValueError) as e:
         raise UpstreamApiError(f"Cookidoo returned non-JSON payload: {e}") from e
+
+
+def _coerce_iso_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _nutrition_to_dtos(nutrition_groups: Any) -> list[NutritionInfo]:
+    """Flatten Cookidoo's nested nutrition groups into one entry per quantity.
+
+    Upstream shape: ``nutrition_groups[].recipe_nutritions[].nutritions[]``.
+    Each ``recipe_nutritions`` row carries the serving quantity its values
+    apply to, so one ``NutritionInfo`` per row keeps that context without
+    forcing the LLM through three levels of nesting.
+    """
+    result: list[NutritionInfo] = []
+    for group in nutrition_groups:
+        for row in getattr(group, "recipe_nutritions", []) or []:
+            values = [
+                NutritionValue(
+                    type=n.type,
+                    value=float(n.number),
+                    unit=getattr(n, "unittype", "") or "",
+                )
+                for n in getattr(row, "nutritions", []) or []
+            ]
+            result.append(
+                NutritionInfo(
+                    group=getattr(group, "name", "") or "",
+                    quantity=getattr(row, "quantity", None),
+                    unit_notation=getattr(row, "unit_notation", None),
+                    values=values,
+                )
+            )
+    return result
 
 
 def _collection_to_dto(collection: Any) -> CollectionSummary:
@@ -1000,6 +1623,42 @@ def _parse_duration_seconds(value: Any) -> int | None:
 
 _IMAGE_TRANSFORMATION_PLACEHOLDER = "{transformation}"
 _IMAGE_TRANSFORMATION_DEFAULT = "t_web_shared_recipe_221x240"
+_IMAGE_TRANSFORMATION_FULL = "t_web_rdp_recipe_584x480_1_5x"
+
+
+def _resolved_image_url(
+    url: Any, transformation: str = _IMAGE_TRANSFORMATION_DEFAULT
+) -> str | None:
+    """Resolve the CDN ``{transformation}`` placeholder; None for non-URLs."""
+    if not isinstance(url, str) or not url:
+        return None
+    return url.replace(_IMAGE_TRANSFORMATION_PLACEHOLDER, transformation)
+
+
+def _recipe_images_from_payload(payload: Any) -> list[RecipeImage]:
+    """Map ``descriptiveAssets`` to DTOs, resolving the CDN placeholder.
+
+    Each asset carries square/portrait/landscape variants of one photo;
+    non-image entries (e.g. videos) are skipped.
+    """
+    if not isinstance(payload, dict):
+        return []
+    assets = payload.get("descriptiveAssets")
+    if not isinstance(assets, list):
+        return []
+    images: list[RecipeImage] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        asset_type = asset.get("type")
+        if isinstance(asset_type, str) and asset_type != "image":
+            continue
+        variants: dict[str, str | None] = {}
+        for variant in ("square", "portrait", "landscape"):
+            variants[variant] = _resolved_image_url(asset.get(variant), _IMAGE_TRANSFORMATION_FULL)
+        if any(variants.values()):
+            images.append(RecipeImage(**variants))
+    return images
 
 
 def _search_item_to_dto(item: Any) -> RecipeSearchResult | None:
@@ -1013,19 +1672,13 @@ def _search_item_to_dto(item: Any) -> RecipeSearchResult | None:
         # A search hit with no usable title would surface as a blank entry
         # to the LLM. Dropping it is safer than passing an empty string up.
         return None
-    raw_image = item.get("image")
-    image = (
-        raw_image.replace(_IMAGE_TRANSFORMATION_PLACEHOLDER, _IMAGE_TRANSFORMATION_DEFAULT)
-        if isinstance(raw_image, str) and raw_image
-        else None
-    )
     return RecipeSearchResult(
         id=recipe_id,
         name=name,
         rating=_coerce_number(item.get("rating")),
         number_of_ratings=_coerce_int(item.get("numberOfRatings")),
         total_time_seconds=_parse_duration_seconds(item.get("totalTime")),
-        image=image,
+        image=_resolved_image_url(item.get("image")),
     )
 
 
@@ -1053,6 +1706,194 @@ def _coerce_int(value: Any) -> int | None:
     if isinstance(value, float):
         return int(value)
     return None
+
+
+def _first_number(payload: Any, keys: tuple[str, ...]) -> float | None:
+    """Pull the first numeric value found under any of ``keys``.
+
+    The interaction endpoints are undocumented; key candidates cover the
+    naming conventions observed across Cookidoo's other APIs. One level of
+    nesting under a same-named wrapper (``{"rating": {"value": 4}}``) is
+    unwrapped before giving up.
+    """
+    if not isinstance(payload, dict):
+        return None
+    for key in keys:
+        if key in payload:
+            value = payload[key]
+            number = _coerce_number(value)
+            if number is not None:
+                return number
+            if isinstance(value, dict):
+                nested = _first_number(value, keys)
+                if nested is not None:
+                    return nested
+    return None
+
+
+def _own_rating_from_payload(payload: Any) -> int | None:
+    number = _first_number(payload, ("rating", "value", "userRating", "stars"))
+    if number is None:
+        return None
+    rating = int(number)
+    return rating if 1 <= rating <= 5 else None
+
+
+def _aggregated_rating_from_payload(payload: Any) -> tuple[float | None, int | None]:
+    # Live shape (2026-06): {"aggregatedRating": 4.81, "numberOfRatings": 6139, ...}
+    average = _first_number(
+        payload,
+        ("aggregatedRating", "average", "averageRating", "rating", "ratingAverage", "value"),
+    )
+    count_number = _first_number(
+        payload, ("count", "numberOfRatings", "totalRatings", "ratingCount")
+    )
+    count = int(count_number) if count_number is not None else None
+    return average, count
+
+
+def _note_text_from_payload(payload: Any) -> str | None:
+    if isinstance(payload, list):
+        for entry in payload:
+            text = _note_text_from_payload(entry)
+            if text is not None:
+                return text
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for key in ("text", "note", "content", "body"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+        if isinstance(value, dict):
+            nested = _note_text_from_payload(value)
+            if nested is not None:
+                return nested
+    notes = payload.get("notes")
+    if isinstance(notes, list):
+        return _note_text_from_payload(notes)
+    return None
+
+
+def _device_names_from_payload(payload: Any) -> list[str]:
+    """Extract human-usable device/accessory identifiers from an
+    undocumented customer-devices payload (strings, or dicts with one of
+    the usual name-ish keys)."""
+    if isinstance(payload, dict):
+        for key in ("data", "items", "devices", "accessories", "versions", "ids"):
+            if isinstance(payload.get(key), list):
+                payload = payload[key]
+                break
+    if not isinstance(payload, list):
+        return []
+    names: list[str] = []
+    for raw in payload:
+        if isinstance(raw, str) and raw:
+            names.append(raw)
+        elif isinstance(raw, dict):
+            for key in ("name", "model", "version", "deviceType", "id"):
+                value = raw.get(key)
+                if isinstance(value, str) and value:
+                    names.append(value)
+                    break
+    return names
+
+
+def _recommendation_items_from_payload(payload: Any) -> list[RecipeSearchResult]:
+    """Map a recommender/bookmark payload to search-result DTOs.
+
+    Live shapes (2026-06):
+
+    - foryou: ``{"stripes": [{"recipes": [{id, title, averageRating,
+      numRating, totalTime, descriptiveAssets: [{square}]}]}]}``
+    - simrec: bare list of ``{id, title, averageRating, numRating,
+      totalTime, imageSquare}``
+    - bookmarks: ``{"bookmarks": [{"recipe": {id, title, totalTime, ...}}]}``
+    """
+    items: list[Any] = []
+    if isinstance(payload, dict):
+        if isinstance(payload.get("stripes"), list):
+            for stripe in payload["stripes"]:
+                if isinstance(stripe, dict) and isinstance(stripe.get("recipes"), list):
+                    items.extend(stripe["recipes"])
+        elif isinstance(payload.get("bookmarks"), list):
+            items = [
+                entry.get("recipe") for entry in payload["bookmarks"] if isinstance(entry, dict)
+            ]
+        else:
+            for key in ("data", "items", "recipes", "results"):
+                if isinstance(payload.get(key), list):
+                    items = payload[key]
+                    break
+    elif isinstance(payload, list):
+        items = payload
+    results: list[RecipeSearchResult] = []
+    for raw in items:
+        item = _feed_item_to_dto(raw)
+        if item is not None:
+            results.append(item)
+    return results
+
+
+def _cooking_history_from_payload(payload: Any) -> list[CookedRecipe]:
+    """Map the cooking-history payload (``entries[].recipe`` + timestamp)."""
+    if not isinstance(payload, dict):
+        return []
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return []
+    history: list[CookedRecipe] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        recipe = _feed_item_to_dto(entry.get("recipe"))
+        if recipe is None:
+            continue
+        details = entry.get("details")
+        cooked_at = details.get("timestamp") if isinstance(details, dict) else None
+        history.append(
+            CookedRecipe(
+                cooked_at=cooked_at if isinstance(cooked_at, str) else None,
+                recipe=recipe,
+            )
+        )
+    return history
+
+
+def _feed_item_to_dto(item: Any) -> RecipeSearchResult | None:
+    if not isinstance(item, dict):
+        return None
+    recipe_id = item.get("id") or item.get("recipeId")
+    name = item.get("title") or item.get("name")
+    if not isinstance(recipe_id, str) or not recipe_id:
+        return None
+    if not isinstance(name, str) or not name:
+        return None
+    image = None
+    for key in ("imageSquare", "squareImage", "image"):
+        image = _resolved_image_url(item.get(key))
+        if image is not None:
+            break
+    if image is None:
+        assets = item.get("descriptiveAssets")
+        if isinstance(assets, list) and assets and isinstance(assets[0], dict):
+            image = _resolved_image_url(assets[0].get("square"))
+    # Explicit None-coalescing instead of ``or``: a legitimate 0 rating /
+    # 0-ratings count must not fall through to the alternate key.
+    rating = _coerce_number(item.get("averageRating"))
+    if rating is None:
+        rating = _coerce_number(item.get("rating"))
+    number_of_ratings = _coerce_int(item.get("numRating"))
+    if number_of_ratings is None:
+        number_of_ratings = _coerce_int(item.get("numberOfRatings"))
+    return RecipeSearchResult(
+        id=recipe_id,
+        name=name,
+        rating=rating,
+        number_of_ratings=number_of_ratings,
+        total_time_seconds=_parse_duration_seconds(item.get("totalTime")),
+        image=image,
+    )
 
 
 def _custom_recipe_item_to_dto(item: Any) -> CustomRecipeSummary | None:
@@ -1131,10 +1972,11 @@ def _draft_to_payload(
     draft: CustomRecipeDraft, inferrer: AnnotationInferrer | None = None
 ) -> dict[str, Any]:
     annotation_inferrer = inferrer if inferrer is not None else AnnotationInferrer()
+    # No image keys: the PATCH endpoint leaves omitted fields untouched
+    # (verified live), so an update never wipes a previously uploaded photo.
+    # Sending "image": null would reset it to the placeholder.
     return {
         "name": draft.name,
-        "image": None,
-        "isImageOwnedByUser": False,
         "tools": list(draft.tools),
         "yield": {"value": draft.servings, "unitText": "portion"},
         "prepTime": draft.prep_minutes * 60,
@@ -1175,4 +2017,4 @@ def _annotation_to_payload(annotation: StepAnnotation) -> dict[str, Any]:
     return payload
 
 
-__all__ = ["CookidooSession", "CookidooSessionProtocol"]
+__all__ = ["CookidoughSession", "CookidoughSessionProtocol"]

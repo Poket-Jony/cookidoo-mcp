@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING
 
+from ..constants import CALENDAR_SHOPPING_MAX_RANGE_DAYS
 from ..context import ToolContext, get_context
 from ..models import (
     AdditionalItemRename,
@@ -19,16 +21,54 @@ if TYPE_CHECKING:
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def get_shopping_list(ctx: ToolContext) -> ShoppingList:
-        """Return all items on the user's shopping list, grouped by source."""
+        """Return all items on the user's shopping list, grouped by source.
+
+        Also lists the ``recipes`` whose ingredients are currently on the
+        list (with their IDs, usable for ``remove_recipes_from_shopping_list``).
+        """
         return await get_context(ctx).session.get_shopping_list()
 
     @mcp.tool()
-    async def add_recipes_to_shopping_list(ctx: ToolContext, recipe_ids: list[str]) -> str:
-        """Add all ingredients of one or more recipes to the shopping list."""
-        added = await get_context(ctx).session.add_recipes_to_shopping_list(recipe_ids)
+    async def add_recipes_to_shopping_list(
+        ctx: ToolContext,
+        recipe_ids: list[str] | None = None,
+        from_date: date | None = None,
+        to_date: date | None = None,
+    ) -> str:
+        """Add recipe ingredients to the shopping list (two modes).
+
+        Pass EITHER ``recipe_ids`` (add the ingredients of those Cookidoo
+        recipes) OR ``from_date`` + ``to_date`` (add every recipe planned in
+        the calendar within that inclusive range — max 4 weeks — including
+        custom recipes, deduplicated across days).
+        """
+        session = get_context(ctx).session
+        range_given = from_date is not None or to_date is not None
+        if (recipe_ids is not None) == range_given:
+            raise ValueError(
+                "Pass either recipe_ids or a from_date/to_date range — not both, not neither."
+            )
+        if recipe_ids is not None:
+            added = await session.add_recipes_to_shopping_list(recipe_ids)
+            return (
+                f"Added ingredients of {len(recipe_ids)} recipe(s); "
+                f"{added} new item(s) appended to the list."
+            )
+        if from_date is None or to_date is None:
+            raise ValueError("Calendar mode needs both from_date and to_date.")
+        if to_date < from_date:
+            raise ValueError("to_date must not be before from_date.")
+        if (to_date - from_date).days > CALENDAR_SHOPPING_MAX_RANGE_DAYS:
+            raise ValueError(
+                f"Date range exceeds {CALENDAR_SHOPPING_MAX_RANGE_DAYS} days; "
+                f"split it into smaller chunks."
+            )
+        summary = await session.add_calendar_range_to_shopping_list(from_date, to_date)
         return (
-            f"Added ingredients of {len(recipe_ids)} recipe(s); "
-            f"{added} new item(s) appended to the list."
+            f"Added ingredients of {len(summary.recipe_ids)} recipe(s) and "
+            f"{len(summary.custom_recipe_ids)} custom recipe(s) planned between "
+            f"{from_date.isoformat()} and {to_date.isoformat()}; "
+            f"{summary.item_count} new item(s) appended to the list."
         )
 
     @mcp.tool()

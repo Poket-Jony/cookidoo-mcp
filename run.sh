@@ -46,7 +46,7 @@ err()  { printf '%s[run]%s %s\n' "$C_RED"    "$C_RESET" "$*" >&2; }
 # so a fresh clone bootstraps correctly under both shells and GUIs.
 find_python() {
     local cmd path ver candidate
-    for cmd in python3.14 python3.13 python3.12 python3 python; do
+    for cmd in python3.15 python3.14 python3.13 python3.12 python3 python; do
         for path in \
             "" \
             "/opt/homebrew/bin/" \
@@ -125,7 +125,7 @@ assert_credentials() {
 }
 
 start_server() {
-    log "Starting Cookidoo MCP server (transport: ${COOKIDOUGH_MCP_MODE:-stdio})"
+    log "Starting Cookidough MCP server (transport: ${COOKIDOUGH_MCP_MODE:-stdio})"
     exec "${VENV_BIN}/cookidough-mcp" "$@"
 }
 

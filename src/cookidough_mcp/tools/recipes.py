@@ -8,6 +8,7 @@ this module live under the "Recipes" section in the README's tool reference.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from ..constants import ThermomixTool
@@ -16,9 +17,12 @@ from ..errors import QualityGateError
 from ..models import (
     CustomRecipeDetails,
     CustomRecipeDraft,
+    CustomRecipeImageResult,
     CustomRecipeSummary,
     QualityReport,
     RecipeDetails,
+    RecipeImage,
+    RecipeInteractions,
     RecipeStep,
     UploadResult,
     WebImportResult,
@@ -30,9 +34,43 @@ if TYPE_CHECKING:
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
-    async def get_recipe_details(ctx: ToolContext, recipe_id: str) -> RecipeDetails:
-        """Fetch full details of a Cookidoo recipe by its ID."""
-        return await get_context(ctx).session.get_recipe_details(recipe_id)
+    async def get_recipe_details(
+        ctx: ToolContext,
+        recipe_id: str,
+        include_interactions: bool = False,
+        include_images: bool = False,
+    ) -> RecipeDetails:
+        """Fetch full details of a Cookidoo recipe by its ID.
+
+        With ``include_interactions=true`` the result also carries the
+        user's own rating, the community rating and the personal note.
+        With ``include_images=true`` it lists every photo of the recipe
+        (``images``, each in square/portrait/landscape variants). Both
+        flags cost extra upstream calls — request them only when needed.
+        """
+        session = get_context(ctx).session
+        if not include_interactions and not include_images:
+            return await session.get_recipe_details(recipe_id)
+
+        async def _interactions() -> RecipeInteractions | None:
+            if not include_interactions:
+                return None
+            return await session.get_recipe_interactions(recipe_id)
+
+        async def _images() -> list[RecipeImage]:
+            if not include_images:
+                return []
+            return await session.get_recipe_images(recipe_id)
+
+        details, interactions, images = await asyncio.gather(
+            session.get_recipe_details(recipe_id), _interactions(), _images()
+        )
+        update: dict[str, Any] = {}
+        if include_interactions:
+            update["interactions"] = interactions
+        if include_images:
+            update["images"] = images
+        return details.model_copy(update=update)
 
     @mcp.tool()
     async def get_custom_recipe_details(ctx: ToolContext, recipe_id: str) -> CustomRecipeDetails:
@@ -100,12 +138,22 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def upload_custom_recipe(
-        ctx: ToolContext, draft: CustomRecipeDraft, force: bool = False
+        ctx: ToolContext,
+        draft: CustomRecipeDraft,
+        force: bool = False,
+        recipe_id: str | None = None,
     ) -> UploadResult:
         """Upload a custom recipe; refuses when below the configured quality bar.
 
         Pass ``force=true`` only when the user has explicitly accepted a
         sub-threshold upload. Failed uploads are rolled back automatically.
+
+        Pass ``recipe_id`` to overwrite an existing custom recipe instead of
+        creating a new one. The draft is the COMPLETE desired state (full
+        replace): fetch the current recipe via ``get_custom_recipe_details``,
+        edit, and resubmit. Plain-text steps get their guided-cooking
+        annotations re-inferred on upload — original annotations are not
+        preserved unless supplied explicitly in the draft.
 
         For draft construction, see ``generate_recipe_structure`` or the
         README's "Guided-cooking annotations" section — every annotation
@@ -123,8 +171,24 @@ def register(mcp: FastMCP) -> None:
                 score=report.score,
                 threshold=report.threshold,
             )
-        recipe_id, url = await app.session.upload_custom_recipe(draft)
-        return UploadResult(recipe_id=recipe_id, url=url, quality=report)
+        if recipe_id is None:
+            uploaded_id, url = await app.session.upload_custom_recipe(draft)
+        else:
+            uploaded_id, url = await app.session.update_custom_recipe(recipe_id, draft)
+        return UploadResult(recipe_id=uploaded_id, url=url, quality=report)
+
+    @mcp.tool()
+    async def set_custom_recipe_image(
+        ctx: ToolContext, recipe_id: str, image_source: str
+    ) -> CustomRecipeImageResult:
+        """Upload a photo for one of your custom recipes.
+
+        ``image_source`` is a local file path or an http(s) URL. JPEG and
+        PNG are accepted, up to 10 MB and at least 80x80 pixels (the image
+        passes Vorwerk's moderation pipeline). The photo replaces any
+        existing one; later recipe updates keep it.
+        """
+        return await get_context(ctx).session.set_custom_recipe_image(recipe_id, image_source)
 
     @mcp.tool()
     async def list_custom_recipes(ctx: ToolContext) -> list[CustomRecipeSummary]:

@@ -1,6 +1,7 @@
 """Runtime configuration loaded from environment variables."""
 
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Self
 
 from pydantic import Field, SecretStr
@@ -45,6 +46,15 @@ class Settings(BaseSettings):
     mcp_mode: TransportMode = TransportMode.STDIO
     mcp_host: str = "127.0.0.1"
     mcp_port: Annotated[int, Field(gt=0, lt=65536)] = 8765
+
+    cookies_file: Path | None = Field(
+        default=None,
+        description=(
+            "Optional path for persisting session cookies across restarts, "
+            "skipping the OAuth2 login when they are still valid. The file "
+            "contains live session credentials — treat it like a password."
+        ),
+    )
 
     quality_bar: Annotated[int, Field(ge=0, le=100)] = 70
 

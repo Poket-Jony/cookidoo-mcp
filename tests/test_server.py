@@ -47,6 +47,11 @@ _EXPECTED_TOOL_NAMES = frozenset(
         "rename_additional_items",
         "search_recipes",
         "suggest_recipes_from_ingredients",
+        "get_recipe_recommendations",
+        "set_recipe_interactions",
+        "list_bookmarked_recipes",
+        "set_custom_recipe_image",
+        "get_cooking_history",
     }
 )
 
@@ -78,3 +83,51 @@ async def test_readme_tool_count_matches_registration(settings: Settings) -> Non
     assert claimed == len(registered), (
         f"README claims {claimed} MCP tools but {len(registered)} are registered"
     )
+
+
+_EXPECTED_RESOURCE_URIS = frozenset(
+    {
+        "cookidough://shopping-list",
+        "cookidough://calendar/current-week",
+        "cookidough://custom-recipes",
+    }
+)
+
+
+async def test_build_server_registers_resources_and_prompts(settings: Settings) -> None:
+    mcp = build_server(settings)
+    resource_uris = {str(r.uri) for r in await mcp.list_resources()}
+    prompt_names = {p.name for p in await mcp.list_prompts()}
+    assert resource_uris == _EXPECTED_RESOURCE_URIS
+    assert prompt_names == {"plan_week", "cook_from_pantry"}
+
+
+async def test_shopping_list_resource_serializes_session_state(
+    settings: Settings, fake_mcp_context: object, monkeypatch: object
+) -> None:
+    import json
+
+    from ._mcp_internals import get_resource_fn
+
+    mcp = build_server(settings)
+    # Static resources resolve the lifespan context via ``mcp.get_context()``;
+    # outside a live MCP request we substitute the fake context directly.
+    mcp.get_context = lambda: fake_mcp_context  # type: ignore[method-assign,assignment,return-value]
+
+    payload = json.loads(await get_resource_fn(mcp, "cookidough://shopping-list")())
+
+    assert payload["ingredient_items"][0]["name"] == "Tomato"
+
+
+def test_plan_week_prompt_embeds_constraints(settings: Settings) -> None:
+    from ._mcp_internals import get_prompt_fn
+
+    mcp = build_server(settings)
+    text = get_prompt_fn(mcp, "plan_week")(servings=4, diet="vegetarian")
+    assert "4 person(s)" in text
+    assert "vegetarian" in text
+    assert "add_recipes_to_shopping_list" in text
+
+    pantry = get_prompt_fn(mcp, "cook_from_pantry")(ingredients="rice, tomato")
+    assert "rice, tomato" in pantry
+    assert "suggest_recipes_from_ingredients" in pantry

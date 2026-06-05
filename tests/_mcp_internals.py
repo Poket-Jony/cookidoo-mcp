@@ -22,3 +22,19 @@ def get_tool_fn(mcp: FastMCP, name: str) -> Any:
     if tool is None:
         raise KeyError(f"Tool {name!r} is not registered.")
     return tool.fn
+
+
+def get_resource_fn(mcp: FastMCP, uri: str) -> Any:
+    """Return the raw function backing the static resource at `uri`."""
+    for resource in mcp._resource_manager.list_resources():
+        if str(resource.uri) == uri:
+            return resource.fn  # type: ignore[attr-defined]
+    raise KeyError(f"Resource {uri!r} is not registered.")
+
+
+def get_prompt_fn(mcp: FastMCP, name: str) -> Any:
+    """Return the raw function backing the prompt registered under `name`."""
+    for prompt in mcp._prompt_manager.list_prompts():
+        if prompt.name == name:
+            return prompt.fn
+    raise KeyError(f"Prompt {name!r} is not registered.")

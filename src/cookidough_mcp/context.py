@@ -9,7 +9,7 @@ from mcp.server.fastmcp import Context
 
 from .config import Settings
 from .quality import QualityScorer
-from .session import CookidooSessionProtocol
+from .session import CookidoughSessionProtocol
 from .web_import import WebRecipeImporter
 
 
@@ -18,7 +18,7 @@ class AppContext:
     """Dependencies injected into every tool call via FastMCP's lifespan."""
 
     settings: Settings
-    session: CookidooSessionProtocol
+    session: CookidoughSessionProtocol
     scorer: QualityScorer
     importer: WebRecipeImporter
 
