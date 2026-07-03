@@ -1,0 +1,5 @@
+{
+  "deploy": {
+    "startCommand": "bash run.sh"
+  }
+}
