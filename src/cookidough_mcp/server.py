@@ -14,6 +14,15 @@ from .quality import QualityScorer
 from .session import CookidoughSession
 from .tools import register_all
 from .web_import import WebRecipeImporter
+from mcp.server.transport_security import TransportSecuritySettings
+
+mcp = FastMCP(
+    "cookidough",
+    ...,  # bestehende Parameter unverändert lassen
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ),
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
