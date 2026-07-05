@@ -139,10 +139,23 @@ start_server() {
     exec "${VENV_BIN}/cookidough-mcp" "$@"
 }
 
+# Railway (and Heroku/Render) inject PORT and route public traffic to
+# whatever port the app actually listens on — not to a fixed one. Without
+# this, the container starts fine but the platform's edge proxy gets
+# connection-refused against its own PORT and the deployment 502s even
+# though the process is healthy. PORT always wins over a configured
+# COOKIDOUGH_MCP_PORT when present.
+apply_platform_port() {
+    if [ -n "${PORT:-}" ]; then
+        export COOKIDOUGH_MCP_PORT="$PORT"
+    fi
+}
+
 main() {
     ensure_venv
     ensure_dependencies
     load_dotenv
+    apply_platform_port
     assert_credentials
     start_server "$@"
 }
