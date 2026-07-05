@@ -307,10 +307,22 @@ class CookidoughSession:
                 cookie_jar=CookieJar(unsafe=True),
                 timeout=ClientTimeout(total=HTTP_TIMEOUT_SECONDS),
             )
+            # `Settings.email`/`.password` are `| None` because `http` mode leaves
+            # them unset globally, but a `CookidoughSession` is only ever
+            # constructed with both filled in: `Settings.check_mode_requirements`
+            # guarantees it for `stdio`, and `session_cache._build_session` fills
+            # them per-account for `http`. Captured as locals (rather than
+            # re-narrowed from `self._settings` below) so the type stays narrowed
+            # across the intervening `await`s and method calls.
+            assert self._settings.email is not None
+            assert self._settings.password is not None
+            email = self._settings.email
+            password = self._settings.password
+
             try:
                 config = CookidooConfig(
-                    email=self._settings.email,
-                    password=self._settings.password.get_secret_value(),
+                    email=email,
+                    password=password.get_secret_value(),
                     localization=options[0],
                 )
                 client = Cookidoo(session=http, cfg=config)
@@ -336,7 +348,7 @@ class CookidoughSession:
             self._session_generation += 1
             _LOGGER.info(
                 "Authenticated as %s on Cookidoo (%s)",
-                _redact_email(self._settings.email),
+                _redact_email(email),
                 options[0].url,
             )
             return client

@@ -46,3 +46,35 @@ def test_cookies_file_parses_to_path(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(country="de", language="de")
     assert settings.cookies_file is not None
     assert settings.cookies_file.name == "cookidoo-cookies.json"
+
+
+def test_stdio_mode_requires_email_and_password() -> None:
+    with pytest.raises(ValueError, match="COOKIDOUGH_EMAIL"):
+        Settings(mcp_mode="stdio")
+
+
+def test_http_mode_does_not_require_email_and_password() -> None:
+    settings = Settings(
+        mcp_mode="http",
+        public_url="https://example.test",
+        database_url="postgres://example/db",
+        encryption_key=SecretStr("00" * 32),
+    )
+    assert settings.email is None
+    assert settings.password is None
+
+
+def test_http_mode_requires_oauth_settings() -> None:
+    with pytest.raises(ValueError, match="COOKIDOUGH_PUBLIC_URL"):
+        Settings(mcp_mode="http")
+
+
+def test_resource_server_url_and_login_url() -> None:
+    settings = Settings(
+        mcp_mode="http",
+        public_url="https://example.test",
+        database_url="postgres://example/db",
+        encryption_key=SecretStr("00" * 32),
+    )
+    assert settings.resource_server_url == "https://example.test/mcp"
+    assert settings.login_url == "https://example.test/login"

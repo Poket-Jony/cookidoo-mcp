@@ -111,9 +111,35 @@ src/cookidough_mcp/
 ├── annotations.py        # Annotation inferrer (text patterns → StepAnnotation)
 ├── web_import.py         # recipe-scrapers adapter → CustomRecipeDraft
 ├── resources.py          # MCP resources + prompts (read-only context, workflows)
-├── server.py        # FastMCP instance + lifespan
+├── server.py        # FastMCP instance + lifespan (stdio vs http dispatch)
+├── db.py                 # asyncpg pool + migrations + expired-token sweep (http only)
+├── crypto.py             # AES-256-GCM credential encryption + token hashing (http only)
+├── accounts.py           # Encrypted Cookidoo account store (http only)
+├── oauth_provider.py     # OAuthAuthorizationServerProvider, Postgres-backed (http only)
+├── oauth_web.py          # GET /login + POST /login/callback custom routes (http only)
+├── login_page.py         # Renders the Cookidoo login page (http only)
+├── session_cache.py      # Per-account CookidoughSession cache (http only)
 └── tools/           # Thin tool adapters: one module per domain
 ```
+
+### Multi-tenant `http` mode
+
+`stdio` stays single-tenant (one `COOKIDOUGH_EMAIL`/`PASSWORD` per process,
+`AppContext.session` is the one live `CookidoughSession`). `http` mode is
+multi-tenant: this server is its own OAuth 2.1 Authorization Server (Cookidoo
+itself only does email/password), so `AppContext.session` is `None` and
+`context.get_session(ctx)` resolves the right per-caller session instead,
+via `mcp.server.auth.middleware.auth_context.get_access_token()` →
+`AppContext.session_cache`. Every tool/resource must call `get_session(ctx)`
+(never read `AppContext.session` directly) so it works under both
+transports.
+
+`CookidoughOAuthProvider.authorize()` can only return a redirect URL — it
+never sees a request body — so the actual Cookidoo credential form is a
+separate pair of `@mcp.custom_route`s in `oauth_web.py`
+(`GET /login`, `POST /login/callback`) that re-validate `client_id`/
+`redirect_uri` themselves before checking credentials live and issuing an
+authorization code. Access/refresh tokens are stored as SHA-256 hashes only.
 
 **Key invariants** — do not break these without discussion:
 

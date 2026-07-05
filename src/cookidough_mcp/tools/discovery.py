@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..context import ToolContext, get_context
+from ..context import ToolContext, get_session
 from ..models import RecipeSearchResult, RecipeSuggestion
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ def register(mcp: FastMCP) -> None:
         ``thermomix_version`` is ``TM5``/``TM6``/``TM7``; ``sort_by``
         accepts Cookidoo sort keys (e.g. ``relevance``, ``rating``).
         """
-        return await get_context(ctx).session.search_recipes(
+        return await (await get_session(ctx)).search_recipes(
             query,
             limit,
             max_total_minutes=max_total_minutes,
@@ -77,7 +77,7 @@ def register(mcp: FastMCP) -> None:
         (``"chicken"``, ``"rice"``) — substring matching means "rice"
         matches "basmati rice", "wild rice", etc.
         """
-        return await get_context(ctx).session.suggest_recipes_from_ingredients(
+        return await (await get_session(ctx)).suggest_recipes_from_ingredients(
             available_ingredients=available_ingredients,
             collection_ids=collection_ids,
             max_results=max_results,
@@ -93,4 +93,4 @@ def register(mcp: FastMCP) -> None:
         With ``recipe_id`` it returns recipes similar to that one.
         An empty list means Cookidoo had no recommendations available.
         """
-        return await get_context(ctx).session.get_recipe_recommendations(recipe_id, limit)
+        return await (await get_session(ctx)).get_recipe_recommendations(recipe_id, limit)

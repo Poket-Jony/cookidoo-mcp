@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from ..context import ToolContext, get_context
+from ..context import ToolContext, get_session
 from ..models import Subscription, UserProfile
 
 if TYPE_CHECKING:
@@ -29,7 +29,7 @@ def register(mcp: FastMCP) -> None:
         ``devices`` and ``accessories`` linked to the account — useful for
         picking matching ``thermomix_version``/``accessories`` search filters.
         """
-        session = get_context(ctx).session
+        session = await get_session(ctx)
         if not include_devices:
             return await session.get_user_profile()
         profile, (devices, accessories) = await asyncio.gather(
@@ -41,4 +41,4 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def get_subscription(ctx: ToolContext) -> Subscription | None:
         """Return the active Cookidoo subscription, or null if none is active."""
-        return await get_context(ctx).session.get_subscription()
+        return await (await get_session(ctx)).get_subscription()

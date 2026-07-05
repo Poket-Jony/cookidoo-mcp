@@ -11,39 +11,43 @@ import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from .context import get_session
+
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
-    from .context import AppContext
+    from .session import CookidoughSessionProtocol
 
 
 def register(mcp: FastMCP) -> None:
     """Register read-only resources and workflow prompts."""
 
-    def _app() -> AppContext:
+    async def _session() -> CookidoughSessionProtocol:
         # Static resources get no Context parameter injected by FastMCP
         # (only URI templates do); ``get_context()`` resolves the active
-        # request's lifespan context instead.
-        app: AppContext = mcp.get_context().request_context.lifespan_context
-        return app
+        # request's `Context` instead, same object `get_session` expects.
+        return await get_session(mcp.get_context())
 
     @mcp.resource("cookidough://shopping-list", mime_type="application/json")
     async def shopping_list() -> str:
         """The current shopping list: items grouped by source, plus the recipes on it."""
-        result = await _app().session.get_shopping_list()
+        session = await _session()
+        result = await session.get_shopping_list()
         return result.model_dump_json(indent=2)
 
     @mcp.resource("cookidough://calendar/current-week", mime_type="application/json")
     async def calendar_current_week() -> str:
         """The meal plan for the week containing today."""
         today = datetime.now(tz=UTC).astimezone().date()
-        days = await _app().session.get_calendar_week(today)
+        session = await _session()
+        days = await session.get_calendar_week(today)
         return json.dumps([day.model_dump(mode="json") for day in days], indent=2)
 
     @mcp.resource("cookidough://custom-recipes", mime_type="application/json")
     async def custom_recipes() -> str:
         """All custom recipes owned by the authenticated user."""
-        recipes = await _app().session.list_custom_recipes()
+        session = await _session()
+        recipes = await session.list_custom_recipes()
         return json.dumps([recipe.model_dump(mode="json") for recipe in recipes], indent=2)
 
     @mcp.prompt()

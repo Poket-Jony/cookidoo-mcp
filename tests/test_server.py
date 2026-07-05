@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from pydantic import SecretStr
+
 from cookidough_mcp.config import Settings
 from cookidough_mcp.server import build_server
 
@@ -117,6 +119,28 @@ async def test_shopping_list_resource_serializes_session_state(
     payload = json.loads(await get_resource_fn(mcp, "cookidough://shopping-list")())
 
     assert payload["ingredient_items"][0]["name"] == "Tomato"
+
+
+def test_build_server_http_mode_registers_login_routes() -> None:
+    """The http transport wires OAuth without touching the database yet.
+
+    Building the server (and the FastMCP/Starlette app it wraps) must not
+    require a live Postgres connection — that only happens once the ASGI
+    lifespan actually starts. This guards the split between `build_server`
+    (sync, no I/O) and the lifespan (async, opens the pool).
+    """
+    settings = Settings(
+        mcp_mode="http",
+        public_url="https://example.test",
+        database_url="postgres://example/db",
+        encryption_key=SecretStr("00" * 32),
+    )
+
+    from ._mcp_internals import get_custom_route_paths
+
+    mcp = build_server(settings)
+
+    assert {"/login", "/login/callback"}.issubset(get_custom_route_paths(mcp))
 
 
 def test_plan_week_prompt_embeds_constraints(settings: Settings) -> None:

@@ -38,3 +38,8 @@ def get_prompt_fn(mcp: FastMCP, name: str) -> Any:
         if prompt.name == name:
             return prompt.fn
     raise KeyError(f"Prompt {name!r} is not registered.")
+
+
+def get_custom_route_paths(mcp: FastMCP) -> set[str]:
+    """Return the paths registered via `@mcp.custom_route` (e.g. the OAuth login page)."""
+    return {route.path for route in mcp._custom_starlette_routes}

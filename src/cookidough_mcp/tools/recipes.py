@@ -12,7 +12,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from ..constants import ThermomixTool
-from ..context import AppContext, ToolContext, get_context
+from ..context import ToolContext, get_context, get_session
 from ..errors import QualityGateError
 from ..models import (
     CustomRecipeDetails,
@@ -48,7 +48,7 @@ def register(mcp: FastMCP) -> None:
         (``images``, each in square/portrait/landscape variants). Both
         flags cost extra upstream calls — request them only when needed.
         """
-        session = get_context(ctx).session
+        session = await get_session(ctx)
         if not include_interactions and not include_images:
             return await session.get_recipe_details(recipe_id)
 
@@ -75,7 +75,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def get_custom_recipe_details(ctx: ToolContext, recipe_id: str) -> CustomRecipeDetails:
         """Fetch full details of the authenticated user's custom recipe by its ID."""
-        return await get_context(ctx).session.get_custom_recipe_details(recipe_id)
+        return await (await get_session(ctx)).get_custom_recipe_details(recipe_id)
 
     @mcp.tool()
     async def generate_recipe_structure(
@@ -160,8 +160,7 @@ def register(mcp: FastMCP) -> None:
         kind (TTS, INGREDIENT, all seven MODE variants) is accepted here
         verbatim and forwarded to Cookidoo.
         """
-        app = get_context(ctx)
-        report = app.scorer.score(draft)
+        report = get_context(ctx).scorer.score(draft)
         if not report.meets_bar and not force:
             raise QualityGateError(
                 (
@@ -171,10 +170,11 @@ def register(mcp: FastMCP) -> None:
                 score=report.score,
                 threshold=report.threshold,
             )
+        session = await get_session(ctx)
         if recipe_id is None:
-            uploaded_id, url = await app.session.upload_custom_recipe(draft)
+            uploaded_id, url = await session.upload_custom_recipe(draft)
         else:
-            uploaded_id, url = await app.session.update_custom_recipe(recipe_id, draft)
+            uploaded_id, url = await session.update_custom_recipe(recipe_id, draft)
         return UploadResult(recipe_id=uploaded_id, url=url, quality=report)
 
     @mcp.tool()
@@ -188,17 +188,17 @@ def register(mcp: FastMCP) -> None:
         passes Vorwerk's moderation pipeline). The photo replaces any
         existing one; later recipe updates keep it.
         """
-        return await get_context(ctx).session.set_custom_recipe_image(recipe_id, image_source)
+        return await (await get_session(ctx)).set_custom_recipe_image(recipe_id, image_source)
 
     @mcp.tool()
     async def list_custom_recipes(ctx: ToolContext) -> list[CustomRecipeSummary]:
         """List all custom recipes owned by the authenticated user."""
-        return await get_context(ctx).session.list_custom_recipes()
+        return await (await get_session(ctx)).list_custom_recipes()
 
     @mcp.tool()
     async def delete_custom_recipe(ctx: ToolContext, recipe_id: str) -> str:
         """Delete a custom recipe by its ID."""
-        await get_context(ctx).session.delete_custom_recipe(recipe_id)
+        await (await get_session(ctx)).delete_custom_recipe(recipe_id)
         return f"Deleted custom recipe {recipe_id}."
 
     @mcp.tool()
@@ -211,7 +211,7 @@ def register(mcp: FastMCP) -> None:
         ID of any Cookidoo recipe (`get_recipe_details` returns this ID) and
         creates a personal, editable copy at the chosen serving size.
         """
-        return await get_context(ctx).session.clone_recipe_as_custom(recipe_id, serving_size)
+        return await (await get_session(ctx)).clone_recipe_as_custom(recipe_id, serving_size)
 
     @mcp.tool()
     async def import_web_recipe(
@@ -232,15 +232,14 @@ def register(mcp: FastMCP) -> None:
         uploaded and ``upload`` is populated. Otherwise ``upload`` is null
         and ``blocked_reason`` explains what to do next.
         """
-        app = get_context(ctx)
-        draft = await app.importer.fetch(url, name_override)
-        return await _score_and_maybe_upload(app, draft=draft, force=force)
+        draft = await get_context(ctx).importer.fetch(url, name_override)
+        return await _score_and_maybe_upload(ctx, draft=draft, force=force)
 
 
 async def _score_and_maybe_upload(
-    app: AppContext, *, draft: CustomRecipeDraft, force: bool
+    ctx: ToolContext, *, draft: CustomRecipeDraft, force: bool
 ) -> WebImportResult:
-    report = app.scorer.score(draft)
+    report = get_context(ctx).scorer.score(draft)
     if not report.meets_bar and not force:
         return WebImportResult(
             draft=draft,
@@ -255,7 +254,8 @@ async def _score_and_maybe_upload(
                 f"the draft as-is."
             ),
         )
-    recipe_id, public_url = await app.session.upload_custom_recipe(draft)
+    session = await get_session(ctx)
+    recipe_id, public_url = await session.upload_custom_recipe(draft)
     return WebImportResult(
         draft=draft,
         quality=report,

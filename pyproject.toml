@@ -17,6 +17,8 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
     "recipe-scrapers>=15.0",
+    "asyncpg>=0.29",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]
@@ -89,7 +91,7 @@ warn_redundant_casts = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["cookidoo_api.*", "recipe_scrapers.*"]
+module = ["cookidoo_api.*", "recipe_scrapers.*", "asyncpg.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

@@ -112,8 +112,18 @@ load_dotenv() {
 
 assert_credentials() {
     local missing=()
-    [ -z "${COOKIDOUGH_EMAIL:-}" ]    && missing+=("COOKIDOUGH_EMAIL")
-    [ -z "${COOKIDOUGH_PASSWORD:-}" ] && missing+=("COOKIDOUGH_PASSWORD")
+    if [ "${COOKIDOUGH_MCP_MODE:-stdio}" = "http" ]; then
+        # http mode is multi-tenant: accounts come from the OAuth login page,
+        # not a fixed COOKIDOUGH_EMAIL/PASSWORD pair. It needs the OAuth/
+        # persistence trio instead (validated again, with a clearer error, by
+        # Settings itself).
+        [ -z "${COOKIDOUGH_PUBLIC_URL:-}" ]     && missing+=("COOKIDOUGH_PUBLIC_URL")
+        [ -z "${COOKIDOUGH_DATABASE_URL:-}" ]    && missing+=("COOKIDOUGH_DATABASE_URL")
+        [ -z "${COOKIDOUGH_ENCRYPTION_KEY:-}" ]  && missing+=("COOKIDOUGH_ENCRYPTION_KEY")
+    else
+        [ -z "${COOKIDOUGH_EMAIL:-}" ]    && missing+=("COOKIDOUGH_EMAIL")
+        [ -z "${COOKIDOUGH_PASSWORD:-}" ] && missing+=("COOKIDOUGH_PASSWORD")
+    fi
     if [ "${#missing[@]}" -eq 0 ]; then
         return
     fi

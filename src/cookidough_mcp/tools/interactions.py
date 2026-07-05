@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from ..context import ToolContext, get_context
+from ..context import ToolContext, get_session
 from ..errors import NotFoundError, UpstreamApiError
 from ..models import CookedRecipe, RecipeInteractionResult, RecipeSearchResult
 from ..session import CookidoughSessionProtocol
@@ -50,7 +50,7 @@ def register(mcp: FastMCP) -> None:
             raise ValueError(
                 "Provide at least one action: rating, bookmarked, note or mark_cooked."
             )
-        session = get_context(ctx).session
+        session = await get_session(ctx)
         actions = _build_actions(
             session,
             recipe_id,
@@ -68,12 +68,12 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def list_bookmarked_recipes(ctx: ToolContext) -> list[RecipeSearchResult]:
         """List the recipes the user has bookmarked ("My recipes")."""
-        return await get_context(ctx).session.list_bookmarked_recipes()
+        return await (await get_session(ctx)).list_bookmarked_recipes()
 
     @mcp.tool()
     async def get_cooking_history(ctx: ToolContext, limit: int = 20) -> list[CookedRecipe]:
         """List the recipes the user has logged as cooked, newest first."""
-        return await get_context(ctx).session.get_cooking_history(limit)
+        return await (await get_session(ctx)).get_cooking_history(limit)
 
 
 def _build_actions(

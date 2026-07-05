@@ -6,7 +6,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from ..constants import CALENDAR_SHOPPING_MAX_RANGE_DAYS
-from ..context import ToolContext, get_context
+from ..context import ToolContext, get_session
 from ..models import (
     AdditionalItemRename,
     ShoppingItemOwnershipUpdate,
@@ -26,7 +26,7 @@ def register(mcp: FastMCP) -> None:
         Also lists the ``recipes`` whose ingredients are currently on the
         list (with their IDs, usable for ``remove_recipes_from_shopping_list``).
         """
-        return await get_context(ctx).session.get_shopping_list()
+        return await (await get_session(ctx)).get_shopping_list()
 
     @mcp.tool()
     async def add_recipes_to_shopping_list(
@@ -42,7 +42,7 @@ def register(mcp: FastMCP) -> None:
         the calendar within that inclusive range — max 4 weeks — including
         custom recipes, deduplicated across days).
         """
-        session = get_context(ctx).session
+        session = await get_session(ctx)
         range_given = from_date is not None or to_date is not None
         if (recipe_ids is not None) == range_given:
             raise ValueError(
@@ -74,30 +74,30 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     async def remove_recipes_from_shopping_list(ctx: ToolContext, recipe_ids: list[str]) -> str:
         """Remove the ingredients of the given recipes from the shopping list."""
-        await get_context(ctx).session.remove_recipes_from_shopping_list(recipe_ids)
+        await (await get_session(ctx)).remove_recipes_from_shopping_list(recipe_ids)
         return f"Removed ingredients of {len(recipe_ids)} recipe(s)."
 
     @mcp.tool()
     async def add_additional_items(ctx: ToolContext, names: list[str]) -> list[ShoppingListItem]:
         """Append free-text items (not tied to a recipe) to the shopping list."""
-        return await get_context(ctx).session.add_additional_items(names)
+        return await (await get_session(ctx)).add_additional_items(names)
 
     @mcp.tool()
     async def remove_additional_items(ctx: ToolContext, item_ids: list[str]) -> str:
         """Remove the given free-text shopping list items by their IDs."""
-        await get_context(ctx).session.remove_additional_items(item_ids)
+        await (await get_session(ctx)).remove_additional_items(item_ids)
         return f"Removed {len(item_ids)} additional item(s)."
 
     @mcp.tool()
     async def clear_shopping_list(ctx: ToolContext) -> str:
         """Remove every item from the shopping list."""
-        await get_context(ctx).session.clear_shopping_list()
+        await (await get_session(ctx)).clear_shopping_list()
         return "Shopping list cleared."
 
     @mcp.tool()
     async def add_custom_recipes_to_shopping_list(ctx: ToolContext, recipe_ids: list[str]) -> str:
         """Add all ingredients of one or more **custom** recipes to the shopping list."""
-        added = await get_context(ctx).session.add_custom_recipes_to_shopping_list(recipe_ids)
+        added = await (await get_session(ctx)).add_custom_recipes_to_shopping_list(recipe_ids)
         return (
             f"Added ingredients of {len(recipe_ids)} custom recipe(s); "
             f"{added} new item(s) appended to the list."
@@ -108,7 +108,7 @@ def register(mcp: FastMCP) -> None:
         ctx: ToolContext, recipe_ids: list[str]
     ) -> str:
         """Remove the ingredients of the given **custom** recipes from the shopping list."""
-        await get_context(ctx).session.remove_custom_recipes_from_shopping_list(recipe_ids)
+        await (await get_session(ctx)).remove_custom_recipes_from_shopping_list(recipe_ids)
         return f"Removed ingredients of {len(recipe_ids)} custom recipe(s)."
 
     @mcp.tool()
@@ -121,18 +121,18 @@ def register(mcp: FastMCP) -> None:
         tick (already-bought) or untick it on the shopping list. Item IDs
         come from ``get_shopping_list`` (``ingredient_items[*].id``).
         """
-        return await get_context(ctx).session.set_ingredient_items_ownership(updates)
+        return await (await get_session(ctx)).set_ingredient_items_ownership(updates)
 
     @mcp.tool()
     async def set_additional_items_ownership(
         ctx: ToolContext, updates: list[ShoppingItemOwnershipUpdate]
     ) -> list[ShoppingListItem]:
         """Check or uncheck free-text shopping list items by ID."""
-        return await get_context(ctx).session.set_additional_items_ownership(updates)
+        return await (await get_session(ctx)).set_additional_items_ownership(updates)
 
     @mcp.tool()
     async def rename_additional_items(
         ctx: ToolContext, updates: list[AdditionalItemRename]
     ) -> list[ShoppingListItem]:
         """Rename free-text shopping list items in place by ID."""
-        return await get_context(ctx).session.rename_additional_items(updates)
+        return await (await get_session(ctx)).rename_additional_items(updates)

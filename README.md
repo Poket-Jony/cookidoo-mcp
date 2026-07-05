@@ -44,6 +44,7 @@ recipes, manage shopping lists and meal plans, and upload custom recipes.
 - [Quality gate](#quality-gate)
 - [Guided-cooking annotations](#guided-cooking-annotations)
 - [HTTP transport](#http-transport)
+- [Multi-tenant HTTP / OAuth 2.1](#multi-tenant-http--oauth-21)
 - [Development](#development)
 - [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
@@ -246,13 +247,18 @@ The server is configured purely via environment variables (see
 | `COOKIDOUGH_MCP_HOST`     | no       | `127.0.0.1` | Bind host (HTTP only)                                    |
 | `COOKIDOUGH_MCP_PORT`     | no       | `8765`      | Bind port (HTTP only)                                    |
 | `COOKIDOUGH_QUALITY_BAR`  | no       | `70`        | Minimum Thermomix recipe quality score (0-100) for custom uploads |
-| `COOKIDOUGH_COOKIES_FILE` | no       | -           | Optional path for persisting session cookies across restarts (skips the OAuth2 login while they are valid) |
+| `COOKIDOUGH_COOKIES_FILE` | no       | -           | Optional path for persisting session cookies across restarts (skips the OAuth2 login while they are valid); `stdio` only |
 
 > **Security note on `COOKIDOUGH_COOKIES_FILE`:** the file contains live
 > session cookies — anyone who can read it can act as your Cookidoo
 > account. The server writes it with `0600` permissions; keep it outside
 > any repository (the bundled `.gitignore` excludes `cookies.json` /
 > `*.cookies.json`) and treat it like a password.
+
+`COOKIDOUGH_EMAIL`/`COOKIDOUGH_PASSWORD` are required in `stdio` mode (one
+account per process) and unused in `http` mode, which is multi-tenant instead
+— see [Multi-tenant HTTP / OAuth 2.1](#multi-tenant-http--oauth-21) for the
+variables `http` mode needs.
 
 ## Tool reference
 
@@ -565,7 +571,88 @@ COOKIDOUGH_MCP_PORT=8765 \
 ```
 
 The server then speaks the MCP streamable-HTTP protocol on the configured
-host/port.
+host/port. The plain `http` mode above is still **single-tenant**: whichever
+`COOKIDOUGH_EMAIL`/`COOKIDOUGH_PASSWORD` you set applies to every caller. For
+multiple independent users (e.g. friends/family, each with their own
+Cookidoo account) see the next section.
+
+## Multi-tenant HTTP / OAuth 2.1
+
+Cookidoo itself is not an OAuth provider — the underlying `cookidoo-api`
+library authenticates with plain email/password. To let several people share
+one deployed server, each with their **own** Cookidoo account, this server
+can act as its own [OAuth 2.1](https://oauth.net/2.1/) Authorization Server:
+on first connect, each caller is redirected to a login page served by this
+same process, enters their own Cookidoo credentials, and gets back an
+access/refresh token pair scoped to their account. From then on every tool
+call resolves to that caller's own `CookidoughSession` (cached per account,
+with the same automatic re-login-on-401 behaviour as `stdio` mode).
+
+This mode requires three additional variables (all required together):
+
+| Variable                    | Example                                             | Description                                                                 |
+| ---------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `COOKIDOUGH_PUBLIC_URL`      | `https://cookidough-mcp-production.up.railway.app`  | The server's public HTTPS URL, no trailing slash. Must match exactly what you register as the Custom Connector URL (plus `/mcp`). |
+| `COOKIDOUGH_DATABASE_URL`    | `postgres://user:pass@host:5432/db`                 | Postgres connection string for OAuth clients/codes/tokens and encrypted Cookidoo credentials. |
+| `COOKIDOUGH_ENCRYPTION_KEY`  | 64 hex chars                                        | 32-byte AES-256-GCM key encrypting stored Cookidoo passwords. Generate with `python -c "import secrets; print(secrets.token_hex(32))"`. Losing this key means every stored account must log in again. |
+
+Tables are created automatically on startup (idempotent `CREATE TABLE IF NOT
+EXISTS`); there is no separate migration step to run.
+
+### Deploying on Railway
+
+```bash
+railway login
+railway init
+railway add --plugin postgresql   # or: New -> Database -> PostgreSQL in the dashboard
+railway up
+```
+
+In the Railway dashboard, set on the service (not the Postgres plugin):
+
+- `COOKIDOUGH_MCP_MODE=http`
+- `COOKIDOUGH_MCP_HOST=0.0.0.0`
+- `COOKIDOUGH_PUBLIC_URL` — the domain Railway generated under **Settings →
+  Networking**
+- `COOKIDOUGH_ENCRYPTION_KEY` — generated as above
+- `COOKIDOUGH_DATABASE_URL` — reference the Postgres plugin's variable
+  (Railway usually offers this as `${{Postgres.DATABASE_URL}}`)
+
+### Connecting from Claude.ai
+
+1. Claude.ai → Settings → Connectors → **Add custom connector**
+2. URL: `https://<your-domain>/mcp`
+3. Click **Connect** — Claude.ai discovers the OAuth metadata, registers
+   itself as a client, and opens this server's own Cookidoo login page
+4. Enter your Cookidoo email/password
+5. Claude.ai receives an access/refresh token pair; every tool call now
+   runs against your own Cookidoo account
+
+Each person who connects gets their own isolated token and cached session —
+nobody sees anyone else's recipes, shopping list, or calendar.
+
+### Testing the flow locally
+
+```bash
+COOKIDOUGH_MCP_MODE=http \
+COOKIDOUGH_PUBLIC_URL=http://localhost:8765 \
+COOKIDOUGH_DATABASE_URL=postgres://localhost/cookidough \
+COOKIDOUGH_ENCRYPTION_KEY=$(python -c "import secrets; print(secrets.token_hex(32))") \
+./run.sh
+```
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+Point the Inspector at `http://localhost:8765/mcp` (Streamable HTTP). It
+detects the 401 + `WWW-Authenticate` challenge, discovers
+`/.well-known/oauth-protected-resource/mcp` and
+`/.well-known/oauth-authorization-server`, registers itself, and opens the
+login page in a browser. Log in with a real (or throwaway test) Cookidoo
+account; the Inspector should then list all 42 tools. `http://localhost` is
+allowed as an exception to the HTTPS-only issuer rule — a real deployment
+must be HTTPS, which Railway provides by default.
 
 ## Development
 
