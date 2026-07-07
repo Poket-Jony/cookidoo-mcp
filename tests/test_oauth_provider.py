@@ -11,8 +11,10 @@ from urllib.parse import parse_qs, urlsplit
 
 from mcp.server.auth.provider import AuthorizationParams
 from mcp.shared.auth import OAuthClientInformationFull
-from pydantic import AnyUrl
+from pydantic import AnyUrl, SecretStr
 
+from cookidough_mcp.config import Settings
+from cookidough_mcp.db import LazyPool
 from cookidough_mcp.oauth_provider import CookidoughOAuthProvider, _code_from_row
 
 
@@ -23,8 +25,21 @@ def _client() -> OAuthClientInformationFull:
     )
 
 
+def _unused_lazy_pool() -> LazyPool:
+    """A `LazyPool` that must never actually connect (`.get()` is never called)."""
+    return LazyPool(
+        Settings(
+            mcp_mode="http",
+            public_url="https://example.test",
+            database_url="postgres://example/db",
+            encryption_key=SecretStr("00" * 32),
+        )
+    )
+
+
 async def test_authorize_redirects_to_login_with_params_preserved() -> None:
     provider = CookidoughOAuthProvider(
+        _unused_lazy_pool(),
         login_url="https://example.test/login",
         resource_server_url="https://example.test/mcp",
     )

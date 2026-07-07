@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING
 from .crypto import decrypt_secret, encrypt_secret, new_id
 
 if TYPE_CHECKING:
-    import asyncpg
     from pydantic import SecretStr
+
+    from .db import LazyPool
 
 
 @dataclass(frozen=True)
@@ -26,12 +27,13 @@ class CookidoughAccount:
 
 
 async def upsert_account(
-    pool: asyncpg.Pool, email: str, password: str, encryption_key: SecretStr
+    lazy_pool: LazyPool, email: str, password: str, encryption_key: SecretStr
 ) -> CookidoughAccount:
     """Insert or refresh the stored credentials for ``email``; returns the account."""
     normalized_email = email.strip().lower()
     encrypted_password = encrypt_secret(password, encryption_key)
     account_id = new_id()
+    pool = await lazy_pool.get()
     row = await pool.fetchrow(
         """
         INSERT INTO cookidough_accounts (id, email, encrypted_password)
@@ -49,8 +51,9 @@ async def upsert_account(
 
 
 async def get_account_by_id(
-    pool: asyncpg.Pool, account_id: str, encryption_key: SecretStr
+    lazy_pool: LazyPool, account_id: str, encryption_key: SecretStr
 ) -> CookidoughAccount | None:
+    pool = await lazy_pool.get()
     row = await pool.fetchrow(
         "SELECT id, email, encrypted_password FROM cookidough_accounts WHERE id = $1",
         account_id,

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
     from .config import Settings
+    from .db import LazyPool
     from .oauth_provider import CookidoughOAuthProvider
     from .session_cache import CookidoughSessionCache
 
@@ -47,6 +48,7 @@ def register(
     provider: CookidoughOAuthProvider,
     settings: Settings,
     session_cache: CookidoughSessionCache,
+    lazy_pool: LazyPool,
 ) -> None:
     assert settings.encryption_key is not None  # enforced by Settings.check_mode_requirements
 
@@ -100,7 +102,7 @@ def register(
             )
 
         assert settings.encryption_key is not None  # enforced by Settings.check_mode_requirements
-        account = await upsert_account(provider.pool, email, password, settings.encryption_key)
+        account = await upsert_account(lazy_pool, email, password, settings.encryption_key)
         session_cache.store(account, session)
 
         code = await provider.create_authorization_code(

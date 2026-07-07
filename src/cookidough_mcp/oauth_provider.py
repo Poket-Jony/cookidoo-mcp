@@ -32,8 +32,9 @@ from pydantic import AnyUrl
 from .crypto import new_id, random_token, sha256_hex
 
 if TYPE_CHECKING:
-    import asyncpg
     from asyncpg import Record
+
+    from .db import LazyPool
 
 _CODE_TTL_SECONDS = 60
 _ACCESS_TOKEN_TTL_SECONDS = 60 * 60
@@ -59,36 +60,28 @@ class CookidoughOAuthProvider(
 ):
     """Postgres-backed `OAuthAuthorizationServerProvider` for the http transport.
 
-    The pool is created inside FastMCP's async lifespan (it must share that
-    event loop), but this provider has to exist already when `FastMCP(...)`
-    is constructed. `set_pool` bridges the two: the lifespan calls it once
-    the pool is ready, before the ASGI app starts accepting requests.
+    Takes the shared `LazyPool` (see `db.py`) rather than a raw pool: the
+    pool must be created from inside a real request-handling coroutine to
+    stay bound to the loop that's actually serving traffic, not eagerly
+    during the ASGI lifespan.
     """
 
-    def __init__(self, *, login_url: str, resource_server_url: str) -> None:
-        self._pool: asyncpg.Pool | None = None
+    def __init__(self, lazy_pool: LazyPool, *, login_url: str, resource_server_url: str) -> None:
+        self._lazy_pool = lazy_pool
         self._login_url = login_url
         self._resource_server_url = resource_server_url
 
-    def set_pool(self, pool: asyncpg.Pool) -> None:
-        self._pool = pool
-
-    @property
-    def pool(self) -> asyncpg.Pool:
-        assert self._pool is not None, "set_pool() must run before the provider is used."
-        return self._pool
-
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        row = await self.pool.fetchrow(
-            "SELECT data FROM oauth_clients WHERE client_id = $1", client_id
-        )
+        pool = await self._lazy_pool.get()
+        row = await pool.fetchrow("SELECT data FROM oauth_clients WHERE client_id = $1", client_id)
         if row is None:
             return None
         return OAuthClientInformationFull.model_validate(json.loads(row["data"]))
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         assert client_info.client_id is not None
-        await self.pool.execute(
+        pool = await self._lazy_pool.get()
+        await pool.execute(
             "INSERT INTO oauth_clients (client_id, data) VALUES ($1, $2::jsonb)",
             client_info.client_id,
             client_info.model_dump_json(),
@@ -132,7 +125,7 @@ class CookidoughOAuthProvider(
         provider protocol.
         """
         code = random_token()
-        await self.pool.execute(
+        await (await self._lazy_pool.get()).execute(
             """
             INSERT INTO oauth_codes
                 (code, client_id, account_id, redirect_uri, redirect_uri_provided_explicitly,
@@ -154,7 +147,7 @@ class CookidoughOAuthProvider(
     async def load_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: str
     ) -> AuthorizationCode | None:
-        row = await self.pool.fetchrow(
+        row = await (await self._lazy_pool.get()).fetchrow(
             """
             SELECT * FROM oauth_codes
             WHERE code = $1 AND client_id = $2 AND used_at IS NULL AND expires_at > now()
@@ -167,7 +160,7 @@ class CookidoughOAuthProvider(
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
-        row = await self.pool.fetchrow(
+        row = await (await self._lazy_pool.get()).fetchrow(
             """
             UPDATE oauth_codes SET used_at = now()
             WHERE code = $1 AND used_at IS NULL AND expires_at > now()
@@ -190,7 +183,7 @@ class CookidoughOAuthProvider(
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> RefreshToken | None:
-        row = await self.pool.fetchrow(
+        row = await (await self._lazy_pool.get()).fetchrow(
             """
             SELECT * FROM oauth_tokens
             WHERE refresh_token_hash = $1 AND client_id = $2
@@ -218,7 +211,7 @@ class CookidoughOAuthProvider(
         # Rotation: the old refresh token is revoked in the same statement that
         # confirms it was still valid, so a replayed refresh token can only
         # ever win this race once.
-        row = await self.pool.fetchrow(
+        row = await (await self._lazy_pool.get()).fetchrow(
             """
             UPDATE oauth_tokens SET revoked_at = now()
             WHERE refresh_token_hash = $1 AND revoked_at IS NULL
@@ -239,7 +232,7 @@ class CookidoughOAuthProvider(
         )
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        row = await self.pool.fetchrow(
+        row = await (await self._lazy_pool.get()).fetchrow(
             """
             SELECT * FROM oauth_tokens
             WHERE access_token_hash = $1 AND revoked_at IS NULL AND access_token_expires_at > now()
@@ -263,7 +256,7 @@ class CookidoughOAuthProvider(
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         token_hash = sha256_hex(token.token)
-        await self.pool.execute(
+        await (await self._lazy_pool.get()).execute(
             "UPDATE oauth_tokens SET revoked_at = now() "
             "WHERE (access_token_hash = $1 OR refresh_token_hash = $1) AND revoked_at IS NULL",
             token_hash,
@@ -274,7 +267,7 @@ class CookidoughOAuthProvider(
     ) -> OAuthToken:
         access_token = random_token()
         refresh_token = random_token()
-        await self.pool.execute(
+        await (await self._lazy_pool.get()).execute(
             """
             INSERT INTO oauth_tokens
                 (id, access_token_hash, refresh_token_hash, client_id, account_id,

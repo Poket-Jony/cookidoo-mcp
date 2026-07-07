@@ -65,7 +65,15 @@ def _build_http_server(resolved: Settings) -> FastMCP:
     """Multi-tenant server: each caller authenticates via our own OAuth login page."""
     assert resolved.public_url is not None  # enforced by Settings.check_mode_requirements
 
+    # The pool is created lazily, on first real use from inside a request
+    # handler (see `db.LazyPool`) rather than here in the lifespan. Creating
+    # it eagerly during ASGI startup left it bound to a different asyncio
+    # loop than the one serving requests under `anyio.run()` + uvicorn,
+    # which made every DB-backed OAuth call fail with
+    # "RuntimeError: ... attached to a different loop".
+    lazy_pool = db.LazyPool(resolved)
     provider = CookidoughOAuthProvider(
+        lazy_pool,
         login_url=resolved.login_url,
         resource_server_url=resolved.resource_server_url,
     )
@@ -73,10 +81,6 @@ def _build_http_server(resolved: Settings) -> FastMCP:
 
     @asynccontextmanager
     async def lifespan(_mcp: FastMCP) -> AsyncIterator[AppContext]:
-        pool = await db.create_pool(resolved)
-        provider.set_pool(pool)
-        await db.run_migrations(pool)
-        cleanup_task = db.start_cleanup_task(pool)
         try:
             yield AppContext(
                 settings=resolved,
@@ -84,12 +88,11 @@ def _build_http_server(resolved: Settings) -> FastMCP:
                 scorer=QualityScorer(threshold=resolved.quality_bar),
                 importer=WebRecipeImporter(),
                 session_cache=session_cache,
-                pool=pool,
+                pool=lazy_pool,
             )
         finally:
-            await db.stop_cleanup_task(cleanup_task)
             await session_cache.aclose()
-            await pool.close()
+            await lazy_pool.aclose()
 
     mcp = FastMCP(
         name="cookidough",
@@ -107,5 +110,7 @@ def _build_http_server(resolved: Settings) -> FastMCP:
     )
     register_all(mcp)
     resources.register(mcp)
-    oauth_web.register(mcp, provider=provider, settings=resolved, session_cache=session_cache)
+    oauth_web.register(
+        mcp, provider=provider, settings=resolved, session_cache=session_cache, lazy_pool=lazy_pool
+    )
     return mcp

@@ -16,9 +16,8 @@ from .session import CookidoughSessionProtocol
 from .web_import import WebRecipeImporter
 
 if TYPE_CHECKING:
-    import asyncpg
-
     from .accounts import CookidoughAccount
+    from .db import LazyPool
     from .session_cache import CookidoughSessionCache
 
 
@@ -37,7 +36,7 @@ class AppContext:
     scorer: QualityScorer
     importer: WebRecipeImporter
     session_cache: CookidoughSessionCache | None = None
-    pool: asyncpg.Pool | None = None
+    pool: LazyPool | None = None
 
 
 ToolContext = Context[Any, AppContext, Any]
@@ -69,11 +68,11 @@ async def get_session(ctx: ToolContext) -> CookidoughSessionProtocol:
         raise AuthenticationError("Request is not authenticated with a Cookidoo account.")
 
     account_id = access_token.subject
-    pool = app_context.pool
+    lazy_pool = app_context.pool
     encryption_key = app_context.settings.encryption_key
     assert encryption_key is not None  # enforced by Settings.check_mode_requirements
 
     async def _load_account() -> CookidoughAccount | None:
-        return await get_account_by_id(pool, account_id, encryption_key)
+        return await get_account_by_id(lazy_pool, account_id, encryption_key)
 
     return await app_context.session_cache.get_or_create(account_id, _load_account)
