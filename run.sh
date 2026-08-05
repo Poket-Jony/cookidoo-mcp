@@ -97,8 +97,20 @@ ensure_dependencies() {
         return
     fi
     log "Installing project dependencies (this may take a moment)..."
-    "${VENV_BIN}/pip" install --quiet --disable-pip-version-check --upgrade pip
-    "${VENV_BIN}/pip" install --quiet --disable-pip-version-check -e .
+    # A venv created by `uv venv` ships without pip, so fall back to uv itself
+    # (targeting the project venv explicitly) instead of failing on a missing
+    # `.venv/bin/pip`. Venvs created by `ensure_venv` always have pip.
+    if [ -x "${VENV_BIN}/pip" ]; then
+        "${VENV_BIN}/pip" install --quiet --disable-pip-version-check --upgrade pip
+        "${VENV_BIN}/pip" install --quiet --disable-pip-version-check -e .
+    elif command -v uv >/dev/null 2>&1; then
+        uv pip install --quiet --python "${VENV_BIN}/python" -e .
+    else
+        err "Cannot install dependencies: neither '${VENV_BIN}/pip' nor 'uv' exists."
+        err "Add pip to the venv ('${VENV_BIN}/python -m ensurepip --upgrade'),"
+        err "or install uv (https://docs.astral.sh/uv/), then re-run."
+        exit 1
+    fi
     touch "$INSTALL_MARKER"
 }
 

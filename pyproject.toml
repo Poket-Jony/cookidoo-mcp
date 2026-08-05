@@ -11,7 +11,9 @@ requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
-    "mcp[cli]>=1.2",
+    # mcp 2.0 removed `mcp.server.fastmcp` in favour of `MCPServer`; this
+    # server is still built on FastMCP, so stay on the 1.x line.
+    "mcp[cli]>=1.2,<2",
     "cookidoo-api>=0.17.1",
     "aiohttp>=3.9",
     "pydantic>=2.7",
