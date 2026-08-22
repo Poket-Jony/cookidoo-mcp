@@ -295,6 +295,63 @@ async def test_ensure_logged_in_translates_auth_exception(
         await session._ensure_logged_in()
 
 
+async def test_ensure_logged_in_falls_back_to_bare_language_subtag(
+    settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Single-language markets are published without a region subtag.
+
+    Poland is listed as ``country='pl'`` / ``language='pl'``, so the canonical
+    ``pl-PL`` built by ``Settings.language_code`` matches nothing. The session
+    must retry once with the primary subtag instead of failing the login.
+    """
+    settings.country = "pl"
+    settings.language = "pl"
+    session = CookidoughSession(settings)
+    asked: list[str] = []
+
+    async def _options(country: str, language: str) -> list[Any]:
+        asked.append(language)
+        if language != "pl":
+            return []
+        return [_NS(country_code=country, language=language, url="https://cookidoo.pl")]
+
+    monkeypatch.setattr("cookidough_mcp.session.get_localization_options", _options)
+
+    class _OkClient:
+        async def login(self) -> None:
+            return None
+
+    monkeypatch.setattr("cookidough_mcp.session.Cookidoo", lambda **_: _OkClient())
+
+    try:
+        await session._ensure_logged_in()
+    finally:
+        await session.aclose()
+
+    assert asked == ["pl-PL", "pl"]
+
+
+async def test_ensure_logged_in_raises_when_no_locale_matches_either_form(
+    settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = CookidoughSession(settings)
+    asked: list[str] = []
+
+    async def _options(country: str, language: str) -> list[Any]:
+        asked.append(language)
+        return []
+
+    monkeypatch.setattr("cookidough_mcp.session.get_localization_options", _options)
+
+    try:
+        with pytest.raises(AuthenticationError):
+            await session._ensure_logged_in()
+    finally:
+        await session.aclose()
+
+    assert asked == ["de-DE", "de"]
+
+
 async def test_relogin_is_skipped_when_generation_advanced(
     settings: Any,
 ) -> None:

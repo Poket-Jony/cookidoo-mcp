@@ -292,6 +292,19 @@ class CookidoughSession:
                 language=self._settings.language_code,
             )
             if not options:
+                # Not every Cookidoo market is listed under a full BCP-47 tag.
+                # Poland, for example, is published as country='pl' with a bare
+                # language='pl' -- the canonical 'pl-PL' we build in
+                # Settings.language_code matches nothing. Retry once with the
+                # primary subtag before giving up, so single-language markets
+                # stay reachable.
+                primary = self._settings.language_code.partition("-")[0]
+                if primary != self._settings.language_code:
+                    options = await get_localization_options(
+                        country=self._settings.country_code,
+                        language=primary,
+                    )
+            if not options:
                 raise AuthenticationError(
                     f"No Cookidoo locale matches country={self._settings.country_code!r} "
                     f"language={self._settings.language_code!r}."
