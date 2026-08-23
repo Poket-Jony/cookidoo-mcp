@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 from . import auth, calendar, collections, discovery, interactions, recipes, shopping
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
-def register_all(mcp: FastMCP) -> None:
-    """Register all tool modules onto the given FastMCP instance."""
+def register_all(mcp: MCPServer) -> None:
+    """Register all tool modules onto the given MCPServer instance."""
     for module in (auth, recipes, collections, shopping, calendar, discovery, interactions):
         module.register(mcp)
 

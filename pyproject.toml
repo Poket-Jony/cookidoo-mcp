@@ -11,7 +11,9 @@ requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
-    "mcp[cli]>=1.2",
+    # Capped: 2.0 removed `mcp.server.fastmcp` outright, so an unbounded
+    # range breaks fresh installs on every major.
+    "mcp[cli]>=2,<3",
     "cookidoo-api>=0.17.1",
     "aiohttp>=3.9",
     "pydantic>=2.7",

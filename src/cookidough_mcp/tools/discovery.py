@@ -8,10 +8,10 @@ from ..context import ToolContext, get_context
 from ..models import RecipeSearchResult, RecipeSuggestion
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
-def register(mcp: FastMCP) -> None:
+def register(mcp: MCPServer) -> None:
     @mcp.tool()
     async def search_recipes(
         ctx: ToolContext,

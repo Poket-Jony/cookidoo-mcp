@@ -26,6 +26,7 @@ from aiohttp import (
 from cookidoo_api import (
     Cookidoo,
     CookidooConfig,
+    CookidooLocalizationConfig,
     get_localization_options,
 )
 from cookidoo_api.exceptions import (
@@ -234,7 +235,7 @@ class CookidoughSession:
         self._session_generation = 0
         # Latched once ``aclose`` runs. Any subsequent ``_ensure_logged_in``
         # call should fail loud rather than silently spinning up a fresh
-        # session (the FastMCP lifespan treats ``aclose`` as terminal).
+        # session (the MCP server lifespan treats ``aclose`` as terminal).
         self._closed = False
 
     async def __aenter__(self) -> Self:
@@ -287,11 +288,9 @@ class CookidoughSession:
             if self._client is not None:
                 return self._client
 
-            options = await get_localization_options(
-                country=self._settings.country_code,
-                language=self._settings.language_code,
-            )
-            if not options:
+            options = await get_localization_options(country=self._settings.country_code)
+            localization = _match_localization(options, self._settings.language_code)
+            if localization is None:
                 raise AuthenticationError(
                     f"No Cookidoo locale matches country={self._settings.country_code!r} "
                     f"language={self._settings.language_code!r}."
@@ -311,7 +310,7 @@ class CookidoughSession:
                 config = CookidooConfig(
                     email=self._settings.email,
                     password=self._settings.password.get_secret_value(),
-                    localization=options[0],
+                    localization=localization,
                 )
                 client = Cookidoo(session=http, cfg=config)
                 if self._try_load_cookies(client):
@@ -337,7 +336,7 @@ class CookidoughSession:
             _LOGGER.info(
                 "Authenticated as %s on Cookidoo (%s)",
                 _redact_email(self._settings.email),
-                options[0].url,
+                localization.url,
             )
             return client
 
@@ -1409,6 +1408,28 @@ class CookidoughSession:
             yield response
         finally:
             response.release()
+
+
+def _match_localization(
+    options: list[CookidooLocalizationConfig], wanted: str
+) -> CookidooLocalizationConfig | None:
+    """Find the localization for ``wanted``, tolerating non-canonical tags.
+
+    Cookidoo does not publish every market under a ``lang-REGION`` tag: Poland
+    and Czechia use a bare ``pl``/``cs``, and Chinese carries a script subtag
+    (``zh-Hans``). Matching the canonical tag that `Settings.language_code`
+    builds would leave those markets unreachable, so fall back to the primary
+    subtag.
+    """
+    exact = wanted.casefold()
+    primary = exact.partition("-")[0]
+    for option in options:
+        if option.language.casefold() == exact:
+            return option
+    for option in options:
+        if option.language.casefold().partition("-")[0] == primary:
+            return option
+    return None
 
 
 def _read_image_file(raw_path: str) -> bytes:

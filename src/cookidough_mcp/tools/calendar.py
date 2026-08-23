@@ -9,10 +9,10 @@ from ..context import ToolContext, get_context
 from ..models import CalendarDay
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
-def register(mcp: FastMCP) -> None:
+def register(mcp: MCPServer) -> None:
     @mcp.tool()
     async def get_calendar_week(ctx: ToolContext, day: date) -> list[CalendarDay]:
         """Return the meal plan for the calendar week containing the given date."""

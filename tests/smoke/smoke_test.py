@@ -2,7 +2,7 @@
 
 This test launches ``./run.sh`` exactly as Claude Desktop does and drives every
 registered MCP tool over the JSON-RPC stdio protocol. The session layer is
-never imported directly; everything exercises the full transport + FastMCP
+never imported directly; everything exercises the full transport + MCPServer
 dispatch + tool adapter + session + cookidoo-api stack.
 
 Credentials are loaded from a file **outside** the repository tree so they
@@ -55,7 +55,7 @@ import os
 import sys
 import traceback
 import uuid
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -117,7 +117,7 @@ def _refuse_if_dotenv_would_override(repo: Path) -> None:
 # missing .env.test fails fast with a clear message rather than an import noise.
 from mcp import ClientSession, StdioServerParameters  # noqa: E402
 from mcp.client.stdio import stdio_client  # noqa: E402
-from pydantic import AnyUrl  # noqa: E402
+from mcp.types import CallToolResult, TextResourceContents  # noqa: E402
 
 MARKER = uuid.uuid4().hex[:8]
 COLLECTION_NAME = f"[SMOKE_TEST cookidough-mcp] {MARKER}"
@@ -136,7 +136,7 @@ SMOKE_CLONE_RECIPE_ID = "r469077"
 # Per-tool RPC timeout. The first call triggers ``run.sh``'s bootstrap (~2 s on
 # warm checkouts, longer on a cold .venv) and the live Cookidoo login (~3-5 s),
 # so the initial round trip needs a comfortable budget.
-CALL_TIMEOUT = timedelta(seconds=90)
+CALL_TIMEOUT = 90.0
 
 
 def section(title: str) -> None:
@@ -160,19 +160,19 @@ def fail(msg: str) -> None:
 
 
 def _unwrap(payload: Any) -> Any:
-    """Strip FastMCP's ``{"result": …}`` envelope around non-object returns."""
+    """Strip MCPServer's ``{"result": …}`` envelope around non-object returns."""
     if isinstance(payload, dict) and list(payload.keys()) == ["result"]:
         return payload["result"]
     return payload
 
 
-def _payload(result: Any, tool: str) -> Any:
+def _payload(result: CallToolResult, tool: str) -> Any:
     """Return the tool's structured output, or raise if the call errored."""
-    if result.isError:
+    if result.is_error:
         text = " | ".join(getattr(c, "text", str(c)) for c in (result.content or []))
         raise RuntimeError(f"tool {tool!r} returned error: {text or '(no content)'}")
-    if result.structuredContent is not None:
-        return _unwrap(result.structuredContent)
+    if result.structured_content is not None:
+        return _unwrap(result.structured_content)
     if result.content:
         text_payload: str | None = getattr(result.content[0], "text", None)
         if text_payload is not None:
@@ -483,7 +483,7 @@ async def main() -> int:
                 sent = sorted(sent_annotations, key=lambda a: a["offset"])
                 got = sorted(returned_annotations, key=lambda a: a["offset"])
                 if sent == got:
-                    ok(f"explicit annotations survived FastMCP roundtrip ({len(got)} on step 0)")
+                    ok(f"explicit annotations survived the MCP roundtrip ({len(got)} on step 0)")
                     types = sorted({a["type"] for a in got})
                     info(f"annotation types on step 0: {types}")
                 else:
@@ -491,7 +491,7 @@ async def main() -> int:
                     fail(f"annotation roundtrip mismatch: sent={sent!r} got={got!r}")
                 returned_mode = draft_dict["steps"][1].get("annotations", [])
                 if returned_mode == browning_annotations:
-                    ok("MODE/BROWNING annotation survived FastMCP roundtrip")
+                    ok("MODE/BROWNING annotation survived the MCP roundtrip")
                 else:
                     failures += 1
                     fail(
@@ -621,9 +621,11 @@ async def main() -> int:
 
                 section("Resource read (cookidough://shopping-list)")
                 try:
-                    resource = await mcp.read_resource(AnyUrl("cookidough://shopping-list"))
-                    text = resource.contents[0].text  # type: ignore[union-attr]
-                    parsed = json.loads(text)
+                    resource = await mcp.read_resource("cookidough://shopping-list")
+                    content = resource.contents[0]
+                    if not isinstance(content, TextResourceContents):
+                        raise TypeError(f"expected text content, got {type(content).__name__}")
+                    parsed = json.loads(content.text)
                     ok(
                         f"resource read ok — {len(parsed['ingredient_items'])} recipe "
                         f"item(s), {len(parsed['additional_items'])} additional item(s)"

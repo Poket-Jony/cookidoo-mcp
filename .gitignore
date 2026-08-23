@@ -14,6 +14,7 @@ dist/
 .venv/
 venv/
 env/
+uv.lock
 
 # Type & lint caches
 .mypy_cache/

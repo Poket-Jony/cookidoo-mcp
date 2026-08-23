@@ -14,10 +14,10 @@ from ..context import ToolContext, get_context
 from ..models import Subscription, UserProfile
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
-def register(mcp: FastMCP) -> None:
+def register(mcp: MCPServer) -> None:
     @mcp.tool()
     async def get_user_profile(ctx: ToolContext, include_devices: bool = False) -> UserProfile:
         """Return the authenticated user's Cookidoo profile.

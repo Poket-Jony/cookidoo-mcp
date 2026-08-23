@@ -11,7 +11,7 @@ here.
 Thermomix [Cookidoo](https://cookidoo.de) platform to LLM clients (Claude
 Desktop, Claude Code, any MCP-aware tool). It consolidates four predecessor
 projects into a single Python 3.12+ codebase (tested through 3.14) built
-on **FastMCP** and the
+on the **MCP Python SDK** (`MCPServer`, mcp 2.x) and the
 [`miaucl/cookidoo-api`](https://github.com/miaucl/cookidoo-api) library.
 
 The full feature list and tool table is in [`README.md`](README.md).
@@ -24,8 +24,8 @@ cp .env.example .env  # fill in COOKIDOUGH_EMAIL / COOKIDOUGH_PASSWORD
 ```
 
 `run.sh` skips the install step when `pyproject.toml` has not changed since
-the last successful install, so subsequent runs start immediately. Any extra
-arguments are forwarded to `cookidough-mcp`.
+the last successful install, so subsequent runs start immediately. It parses
+no options of its own — configuration is entirely environment-driven.
 
 Manual setup (without `run.sh`) is documented in `README.md` under the
 "Development" section.
@@ -65,7 +65,7 @@ errors block the build.
 - **Python idioms**: Python 3.12+ syntax (PEP 695 generics like
   `async def _run[T](...)`, `Self` return types, `|` unions, no
   `from __future__ import annotations` in code that needs runtime
-  introspection by Pydantic/FastMCP).
+  introspection by Pydantic/MCPServer).
 - **Comments**: Default to none. Only add a comment when the **why** is
   non-obvious (a hidden constraint, a workaround for an upstream quirk).
   Never document what the code does — sprechende identifiers cover that.
@@ -90,7 +90,7 @@ errors block the build.
   update the fake in the same PR.
 - Test the **behaviour**, not the implementation. Avoid tests that assert
   "mock was called" without verifying observable output.
-- Private FastMCP API access is centralized in `tests/_mcp_internals.py`.
+- Private MCPServer API access is centralized in `tests/_mcp_internals.py`.
   If you need a tool function inside a test, route through there.
 - New session methods need both a unit test (DTO mapping, error paths) and
   an integration-style test via `tests/test_session_methods.py`.
@@ -111,7 +111,7 @@ src/cookidough_mcp/
 ├── annotations.py        # Annotation inferrer (text patterns → StepAnnotation)
 ├── web_import.py         # recipe-scrapers adapter → CustomRecipeDraft
 ├── resources.py          # MCP resources + prompts (read-only context, workflows)
-├── server.py        # FastMCP instance + lifespan
+├── server.py        # MCPServer instance + lifespan
 └── tools/           # Thin tool adapters: one module per domain
 ```
 

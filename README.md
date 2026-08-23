@@ -3,7 +3,7 @@
 [![CI](https://github.com/Poket-Jony/cookidough-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Poket-Jony/cookidough-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/)
-[![MCP](https://img.shields.io/badge/MCP-FastMCP-8A2BE2.svg)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-2.x-8A2BE2.svg)](https://modelcontextprotocol.io)
 
 An unofficial [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the
 Thermomix® [Cookidoo®](https://cookidoo.de) platform. Plug it into Claude Desktop,
@@ -167,10 +167,10 @@ cp .env.example .env          # fill in COOKIDOUGH_EMAIL / COOKIDOUGH_PASSWORD
 `run.sh` is idempotent: it detects Python 3.12+, creates `.venv/`, installs
 the project the first time around, loads `.env`, validates credentials, and
 starts the server. Subsequent runs skip the install step and start
-immediately. Any extra arguments are forwarded to `cookidough-mcp`.
+immediately. It parses no options of its own — everything is configured
+through the `COOKIDOUGH_*` environment variables.
 
 ```bash
-./run.sh --help                       # CLI help
 COOKIDOUGH_MCP_MODE=http ./run.sh       # start over HTTP instead of stdio
 ```
 
@@ -630,7 +630,7 @@ src/cookidough_mcp/
 ├── annotations.py       # Annotation inferrer (text patterns → StepAnnotation)
 ├── web_import.py        # recipe-scrapers adapter → CustomRecipeDraft
 ├── resources.py         # MCP resources + prompts (read-only context, workflows)
-├── server.py        # FastMCP instance + lifespan
+├── server.py        # MCPServer instance + lifespan
 └── tools/           # Thin tool adapters: one module per domain
 ```
 
@@ -660,6 +660,14 @@ re-issue the call with `force=true` after the user accepts the trade-off.
 This server keeps `stdout` clean for MCP traffic — only the wire protocol
 goes there, all logs go to `stderr`. If you wrap `run.sh` in another script,
 make sure that wrapper does not write to stdout either.
+
+**`ModuleNotFoundError: No module named 'mcp.server.mcpserver'`** (or
+`'mcp.server.fastmcp'`)
+Your virtualenv is on the wrong `mcp` major. This server targets
+`mcp[cli]>=2,<3` (`MCPServer`); the 1.x line shipped `FastMCP` under
+`mcp.server.fastmcp`. Re-run `./run.sh` — it reinstalls whenever
+`pyproject.toml` is newer than the install marker. For a manual install:
+`pip install --upgrade 'mcp[cli]>=2,<3'`.
 
 **`Access token request failed due to bad request, please check your email or refresh token`**
 Vorwerk retired the `grant_type=password` OAuth flow used by

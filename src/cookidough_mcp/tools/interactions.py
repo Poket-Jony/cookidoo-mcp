@@ -18,10 +18,10 @@ if TYPE_CHECKING:
     from collections.abc import Coroutine
     from typing import Any
 
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
-def register(mcp: FastMCP) -> None:
+def register(mcp: MCPServer) -> None:
     @mcp.tool()
     async def set_recipe_interactions(
         ctx: ToolContext,

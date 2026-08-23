@@ -29,10 +29,10 @@ from ..models import (
 )
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
-def register(mcp: FastMCP) -> None:
+def register(mcp: MCPServer) -> None:
     @mcp.tool()
     async def get_recipe_details(
         ctx: ToolContext,
@@ -117,7 +117,7 @@ def register(mcp: FastMCP) -> None:
         README's "Guided-cooking annotations" section for the full ``data``
         schemas.
         """
-        del ctx  # required-but-unused FastMCP tool argument
+        del ctx  # required-but-unused MCP tool argument
         payload: dict[str, Any] = {
             "name": name,
             "ingredients": ingredients,

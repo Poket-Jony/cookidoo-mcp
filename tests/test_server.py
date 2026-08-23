@@ -1,11 +1,14 @@
-"""Tests for the FastMCP assembly."""
+"""Tests for the MCPServer assembly."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
+import pytest
+
 from cookidough_mcp.config import Settings
+from cookidough_mcp.context import AppContext
 from cookidough_mcp.server import build_server
 
 _EXPECTED_TOOL_NAMES = frozenset(
@@ -103,20 +106,52 @@ async def test_build_server_registers_resources_and_prompts(settings: Settings) 
 
 
 async def test_shopping_list_resource_serializes_session_state(
-    settings: Settings, fake_mcp_context: object, monkeypatch: object
+    app_context: AppContext,
 ) -> None:
     import json
 
+    from mcp.server.mcpserver import MCPServer
+
+    from cookidough_mcp import resources
+
     from ._mcp_internals import get_resource_fn
 
-    mcp = build_server(settings)
-    # Static resources resolve the lifespan context via ``mcp.get_context()``;
-    # outside a live MCP request we substitute the fake context directly.
-    mcp.get_context = lambda: fake_mcp_context  # type: ignore[method-assign,assignment,return-value]
+    mcp = MCPServer(name="test-cookidough")
+    resources.register(mcp, app_context)
 
     payload = json.loads(await get_resource_fn(mcp, "cookidough://shopping-list")())
 
     assert payload["ingredient_items"][0]["name"] == "Tomato"
+
+
+async def test_lifespan_yields_app_context_and_closes_session(settings: Settings) -> None:
+    from cookidough_mcp.errors import UpstreamApiError
+
+    from ._mcp_internals import get_lifespan
+
+    mcp = build_server(settings)
+    async with get_lifespan(mcp)(mcp) as app:
+        assert isinstance(app, AppContext)
+        assert app.settings is settings
+
+    with pytest.raises(UpstreamApiError, match="closed"):
+        await app.session.get_user_profile()
+
+
+async def test_resources_share_the_lifespan_app_context(settings: Settings) -> None:
+    """Resources close over the same AppContext the lifespan yields."""
+    from cookidough_mcp.errors import UpstreamApiError
+
+    from ._mcp_internals import get_lifespan, get_resource_fn
+
+    mcp = build_server(settings)
+    async with get_lifespan(mcp)(mcp):
+        pass
+
+    # The lifespan closed its session on exit; seeing that here proves the
+    # resource handler holds that very context and not a second one.
+    with pytest.raises(UpstreamApiError, match="closed"):
+        await get_resource_fn(mcp, "cookidough://shopping-list")()
 
 
 def test_plan_week_prompt_embeds_constraints(settings: Settings) -> None:

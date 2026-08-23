@@ -7,19 +7,19 @@ from typing import TYPE_CHECKING, Protocol
 from .config import Settings, TransportMode
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
 class Transport(Protocol):
-    """Pluggable strategy that runs a FastMCP instance."""
+    """Pluggable strategy that runs an MCPServer instance."""
 
-    def run(self, mcp: FastMCP) -> None: ...
+    def run(self, mcp: MCPServer) -> None: ...
 
 
 class StdioTransport:
     """Subprocess-style stdio transport used by Claude Desktop."""
 
-    def run(self, mcp: FastMCP) -> None:
+    def run(self, mcp: MCPServer) -> None:
         mcp.run(transport="stdio")
 
 
@@ -30,10 +30,8 @@ class HttpTransport:
         self.host = host
         self.port = port
 
-    def run(self, mcp: FastMCP) -> None:
-        mcp.settings.host = self.host
-        mcp.settings.port = self.port
-        mcp.run(transport="streamable-http")
+    def run(self, mcp: MCPServer) -> None:
+        mcp.run(transport="streamable-http", host=self.host, port=self.port)
 
 
 def transport_from_settings(settings: Settings) -> Transport:

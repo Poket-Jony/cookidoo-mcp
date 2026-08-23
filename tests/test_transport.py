@@ -38,17 +38,18 @@ def test_transport_factory_returns_http_with_settings() -> None:
 
 
 @pytest.mark.parametrize(
-    ("transport", "expected"),
+    ("transport", "expected_kwargs"),
     [
-        (StdioTransport(), "stdio"),
-        (HttpTransport(host="127.0.0.1", port=9000), "streamable-http"),
+        (StdioTransport(), {"transport": "stdio"}),
+        (
+            HttpTransport(host="127.0.0.1", port=9000),
+            {"transport": "streamable-http", "host": "127.0.0.1", "port": 9000},
+        ),
     ],
 )
-def test_transport_invokes_fastmcp_with_correct_kind(
-    transport: StdioTransport | HttpTransport, expected: str
+def test_transport_invokes_mcp_server_with_correct_kind(
+    transport: StdioTransport | HttpTransport, expected_kwargs: dict[str, object]
 ) -> None:
     mcp = MagicMock()
-    if isinstance(transport, HttpTransport):
-        mcp.settings = MagicMock()
     transport.run(mcp)
-    mcp.run.assert_called_once_with(transport=expected)
+    mcp.run.assert_called_once_with(**expected_kwargs)

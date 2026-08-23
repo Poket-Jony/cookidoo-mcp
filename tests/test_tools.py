@@ -7,7 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from cookidough_mcp.context import AppContext
 from cookidough_mcp.errors import QualityGateError, UpstreamApiError
@@ -27,8 +27,8 @@ def _steps(*texts: str) -> list[RecipeStep]:
 
 
 @pytest.fixture
-def registered_mcp() -> FastMCP:
-    mcp = FastMCP(name="test-cookidough")
+def registered_mcp() -> MCPServer:
+    mcp = MCPServer(name="test-cookidough")
     register_all(mcp)
     return mcp
 
@@ -47,33 +47,33 @@ def _low_quality_draft() -> CustomRecipeDraft:
 
 
 async def test_get_user_profile_returns_profile(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     profile = await _tool_fn(registered_mcp, "get_user_profile")(fake_mcp_context)
     assert profile.username == "alice"
 
 
 async def test_get_subscription_returns_active(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     sub = await _tool_fn(registered_mcp, "get_subscription")(fake_mcp_context)
     assert sub is not None
     assert sub.active is True
 
 
-async def test_get_recipe_details(registered_mcp: FastMCP, fake_mcp_context: Any) -> None:
+async def test_get_recipe_details(registered_mcp: MCPServer, fake_mcp_context: Any) -> None:
     details = await _tool_fn(registered_mcp, "get_recipe_details")(fake_mcp_context, recipe_id="r1")
     assert details.id == "r1"
 
 
-async def test_list_managed_collections(registered_mcp: FastMCP, fake_mcp_context: Any) -> None:
+async def test_list_managed_collections(registered_mcp: MCPServer, fake_mcp_context: Any) -> None:
     page = await _tool_fn(registered_mcp, "list_managed_collections")(fake_mcp_context)
     assert page.items[0].id == "mc1"
     assert page.total_pages == 1
 
 
 async def test_add_recipes_to_shopping_list_returns_message(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     message = await _tool_fn(registered_mcp, "add_recipes_to_shopping_list")(
         fake_mcp_context, recipe_ids=["r1", "r2"]
@@ -84,7 +84,7 @@ async def test_add_recipes_to_shopping_list_returns_message(
 
 
 async def test_add_recipes_to_shopping_list_calendar_mode(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     message = await _tool_fn(registered_mcp, "add_recipes_to_shopping_list")(
         fake_mcp_context, from_date=date(2026, 6, 1), to_date=date(2026, 6, 7)
@@ -106,25 +106,25 @@ async def test_add_recipes_to_shopping_list_calendar_mode(
     ],
 )
 async def test_add_recipes_to_shopping_list_rejects_invalid_modes(
-    registered_mcp: FastMCP, fake_mcp_context: Any, kwargs: dict[str, Any]
+    registered_mcp: MCPServer, fake_mcp_context: Any, kwargs: dict[str, Any]
 ) -> None:
     with pytest.raises(ValueError, match=r"date|range|recipe_ids"):
         await _tool_fn(registered_mcp, "add_recipes_to_shopping_list")(fake_mcp_context, **kwargs)
 
 
-async def test_clear_shopping_list(registered_mcp: FastMCP, fake_mcp_context: Any) -> None:
+async def test_clear_shopping_list(registered_mcp: MCPServer, fake_mcp_context: Any) -> None:
     message = await _tool_fn(registered_mcp, "clear_shopping_list")(fake_mcp_context)
     assert message == "Shopping list cleared."
 
 
-async def test_get_calendar_week(registered_mcp: FastMCP, fake_mcp_context: Any) -> None:
+async def test_get_calendar_week(registered_mcp: MCPServer, fake_mcp_context: Any) -> None:
     days = await _tool_fn(registered_mcp, "get_calendar_week")(
         fake_mcp_context, day=date(2026, 5, 21)
     )
     assert days[0].id == "2026-05-21"
 
 
-async def test_generate_recipe_structure(registered_mcp: FastMCP, fake_mcp_context: Any) -> None:
+async def test_generate_recipe_structure(registered_mcp: MCPServer, fake_mcp_context: Any) -> None:
     draft = await _tool_fn(registered_mcp, "generate_recipe_structure")(
         fake_mcp_context,
         name="Soup",
@@ -135,7 +135,7 @@ async def test_generate_recipe_structure(registered_mcp: FastMCP, fake_mcp_conte
 
 
 async def test_validate_recipe_quality_returns_report(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     draft = CustomRecipeDraft(
         name="Bare",
@@ -149,7 +149,7 @@ async def test_validate_recipe_quality_returns_report(
 
 
 async def test_upload_custom_recipe_refuses_low_quality(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     draft = _low_quality_draft()
     with pytest.raises(QualityGateError):
@@ -159,7 +159,7 @@ async def test_upload_custom_recipe_refuses_low_quality(
 
 
 async def test_upload_custom_recipe_force_uploads(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     draft = _low_quality_draft()
     result = await _tool_fn(registered_mcp, "upload_custom_recipe")(
@@ -170,7 +170,7 @@ async def test_upload_custom_recipe_force_uploads(
 
 
 async def test_upload_custom_recipe_with_recipe_id_updates_in_place(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     draft = _low_quality_draft()
     result = await _tool_fn(registered_mcp, "upload_custom_recipe")(
@@ -183,7 +183,7 @@ async def test_upload_custom_recipe_with_recipe_id_updates_in_place(
 
 
 async def test_upload_custom_recipe_update_mode_still_enforces_quality_gate(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     draft = _low_quality_draft()
     with pytest.raises(QualityGateError):
@@ -212,7 +212,7 @@ def _high_quality_draft() -> CustomRecipeDraft:
 
 
 async def test_import_web_recipe_returns_draft_when_blocked(
-    registered_mcp: FastMCP, fake_mcp_context: Any, app_context: AppContext, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, app_context: AppContext, fake_session: Any
 ) -> None:
     """A low-quality scrape returns the draft + quality report, never uploads."""
     low = _low_quality_draft()
@@ -231,7 +231,7 @@ async def test_import_web_recipe_returns_draft_when_blocked(
 
 
 async def test_import_web_recipe_uploads_when_quality_passes(
-    registered_mcp: FastMCP, fake_mcp_context: Any, app_context: AppContext, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, app_context: AppContext, fake_session: Any
 ) -> None:
     high = _high_quality_draft()
     app_context.importer.fetch = AsyncMock(return_value=high)  # type: ignore[method-assign]
@@ -247,7 +247,7 @@ async def test_import_web_recipe_uploads_when_quality_passes(
 
 
 async def test_import_web_recipe_force_uploads_low_quality(
-    registered_mcp: FastMCP, fake_mcp_context: Any, app_context: AppContext, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, app_context: AppContext, fake_session: Any
 ) -> None:
     """`force=True` uploads even when the gate would have blocked."""
     low = _low_quality_draft()
@@ -263,12 +263,12 @@ async def test_import_web_recipe_force_uploads_low_quality(
     assert fake_session.calls.upload_drafts == [low]
 
 
-async def test_list_custom_recipes(registered_mcp: FastMCP, fake_mcp_context: Any) -> None:
+async def test_list_custom_recipes(registered_mcp: MCPServer, fake_mcp_context: Any) -> None:
     items = await _tool_fn(registered_mcp, "list_custom_recipes")(fake_mcp_context)
     assert items[0].recipe_id == "cr1"
 
 
-async def test_delete_custom_recipe(registered_mcp: FastMCP, fake_mcp_context: Any) -> None:
+async def test_delete_custom_recipe(registered_mcp: MCPServer, fake_mcp_context: Any) -> None:
     message = await _tool_fn(registered_mcp, "delete_custom_recipe")(
         fake_mcp_context, recipe_id="cr1"
     )
@@ -276,7 +276,7 @@ async def test_delete_custom_recipe(registered_mcp: FastMCP, fake_mcp_context: A
 
 
 async def test_clone_recipe_as_custom(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     result = await _tool_fn(registered_mcp, "clone_recipe_as_custom")(
         fake_mcp_context, recipe_id="r42", serving_size=2
@@ -287,7 +287,7 @@ async def test_clone_recipe_as_custom(
 
 
 async def test_add_custom_recipes_to_calendar(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     day = date(2026, 6, 1)
     result = await _tool_fn(registered_mcp, "add_custom_recipes_to_calendar")(
@@ -298,7 +298,7 @@ async def test_add_custom_recipes_to_calendar(
 
 
 async def test_remove_custom_recipe_from_calendar(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     day = date(2026, 6, 1)
     result = await _tool_fn(registered_mcp, "remove_custom_recipe_from_calendar")(
@@ -308,7 +308,7 @@ async def test_remove_custom_recipe_from_calendar(
 
 
 async def test_add_custom_recipes_to_shopping_list_returns_message(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     message = await _tool_fn(registered_mcp, "add_custom_recipes_to_shopping_list")(
         fake_mcp_context, recipe_ids=["cr1", "cr2"]
@@ -318,7 +318,7 @@ async def test_add_custom_recipes_to_shopping_list_returns_message(
 
 
 async def test_remove_custom_recipes_from_shopping_list(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     message = await _tool_fn(registered_mcp, "remove_custom_recipes_from_shopping_list")(
         fake_mcp_context, recipe_ids=["cr1"]
@@ -327,7 +327,7 @@ async def test_remove_custom_recipes_from_shopping_list(
 
 
 async def test_set_ingredient_items_ownership(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     items = await _tool_fn(registered_mcp, "set_ingredient_items_ownership")(
         fake_mcp_context,
@@ -342,7 +342,7 @@ async def test_set_ingredient_items_ownership(
 
 
 async def test_set_additional_items_ownership(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     items = await _tool_fn(registered_mcp, "set_additional_items_ownership")(
         fake_mcp_context,
@@ -353,7 +353,7 @@ async def test_set_additional_items_ownership(
 
 
 async def test_rename_additional_items(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     items = await _tool_fn(registered_mcp, "rename_additional_items")(
         fake_mcp_context,
@@ -364,7 +364,7 @@ async def test_rename_additional_items(
 
 
 async def test_search_recipes(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     results = await _tool_fn(registered_mcp, "search_recipes")(
         fake_mcp_context, query="pasta", limit=5
@@ -375,7 +375,7 @@ async def test_search_recipes(
 
 
 async def test_suggest_recipes_from_ingredients(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     results = await _tool_fn(registered_mcp, "suggest_recipes_from_ingredients")(
         fake_mcp_context,
@@ -389,7 +389,7 @@ async def test_suggest_recipes_from_ingredients(
 
 
 async def test_set_recipe_interactions_runs_requested_actions(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     result = await _tool_fn(registered_mcp, "set_recipe_interactions")(
         fake_mcp_context, recipe_id="r1", rating=5, bookmarked=True, note="Top!", mark_cooked=True
@@ -406,7 +406,7 @@ async def test_set_recipe_interactions_runs_requested_actions(
 
 
 async def test_set_recipe_interactions_skips_unrequested_actions(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     result = await _tool_fn(registered_mcp, "set_recipe_interactions")(
         fake_mcp_context, recipe_id="r1", rating=3
@@ -420,14 +420,14 @@ async def test_set_recipe_interactions_skips_unrequested_actions(
 
 
 async def test_set_recipe_interactions_requires_an_action(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     with pytest.raises(ValueError, match="at least one action"):
         await _tool_fn(registered_mcp, "set_recipe_interactions")(fake_mcp_context, recipe_id="r1")
 
 
 async def test_set_recipe_interactions_reports_partial_failures(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     async def _broken_rate(recipe_id: str, stars: int) -> None:
         raise UpstreamApiError("rating service down")
@@ -444,7 +444,7 @@ async def test_set_recipe_interactions_reports_partial_failures(
 
 
 async def test_get_recipe_details_with_interactions(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     details = await _tool_fn(registered_mcp, "get_recipe_details")(
         fake_mcp_context, recipe_id="r1", include_interactions=True
@@ -458,7 +458,7 @@ async def test_get_recipe_details_with_interactions(
 
 
 async def test_get_recipe_recommendations_tool(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     results = await _tool_fn(registered_mcp, "get_recipe_recommendations")(
         fake_mcp_context, recipe_id="r1", limit=3
@@ -467,13 +467,15 @@ async def test_get_recipe_recommendations_tool(
     assert fake_session.calls.recommendation_calls == [("r1", 3)]
 
 
-async def test_list_bookmarked_recipes_tool(registered_mcp: FastMCP, fake_mcp_context: Any) -> None:
+async def test_list_bookmarked_recipes_tool(
+    registered_mcp: MCPServer, fake_mcp_context: Any
+) -> None:
     results = await _tool_fn(registered_mcp, "list_bookmarked_recipes")(fake_mcp_context)
     assert results[0].id == "bm1"
 
 
 async def test_get_user_profile_with_devices(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     profile = await _tool_fn(registered_mcp, "get_user_profile")(
         fake_mcp_context, include_devices=True
@@ -486,7 +488,7 @@ async def test_get_user_profile_with_devices(
 
 
 async def test_set_custom_recipe_image_tool(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     result = await _tool_fn(registered_mcp, "set_custom_recipe_image")(
         fake_mcp_context, recipe_id="cr1", image_source="/tmp/photo.jpg"
@@ -497,7 +499,7 @@ async def test_set_custom_recipe_image_tool(
 
 
 async def test_get_recipe_details_with_images(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     details = await _tool_fn(registered_mcp, "get_recipe_details")(
         fake_mcp_context, recipe_id="r1", include_images=True
@@ -511,7 +513,7 @@ async def test_get_recipe_details_with_images(
 
 
 async def test_get_recipe_details_with_images_and_interactions(
-    registered_mcp: FastMCP, fake_mcp_context: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any
 ) -> None:
     details = await _tool_fn(registered_mcp, "get_recipe_details")(
         fake_mcp_context, recipe_id="r1", include_images=True, include_interactions=True
@@ -522,7 +524,7 @@ async def test_get_recipe_details_with_images_and_interactions(
 
 
 async def test_set_recipe_interactions_marks_custom_recipe_cooked(
-    registered_mcp: FastMCP, fake_mcp_context: Any, fake_session: Any
+    registered_mcp: MCPServer, fake_mcp_context: Any, fake_session: Any
 ) -> None:
     result = await _tool_fn(registered_mcp, "set_recipe_interactions")(
         fake_mcp_context, recipe_id="cr1", mark_cooked=True, is_custom_recipe=True
@@ -531,7 +533,7 @@ async def test_set_recipe_interactions_marks_custom_recipe_cooked(
     assert fake_session.calls.mark_cooked == [("cr1", True)]
 
 
-async def test_get_cooking_history_tool(registered_mcp: FastMCP, fake_mcp_context: Any) -> None:
+async def test_get_cooking_history_tool(registered_mcp: MCPServer, fake_mcp_context: Any) -> None:
     history = await _tool_fn(registered_mcp, "get_cooking_history")(fake_mcp_context, limit=5)
     assert history[0].recipe.id == "hist1"
     assert history[0].cooked_at is not None

@@ -8,7 +8,8 @@
 # - Loads `.env` (if present) into the environment
 # - Validates required credentials and execs the server
 #
-# Any arguments to this script are forwarded to `cookidough-mcp`.
+# Arguments are forwarded to `cookidough-mcp`, which ignores them: the server
+# is configured entirely through the `COOKIDOUGH_*` environment variables.
 
 set -euo pipefail
 
@@ -97,8 +98,19 @@ ensure_dependencies() {
         return
     fi
     log "Installing project dependencies (this may take a moment)..."
-    "${VENV_BIN}/pip" install --quiet --disable-pip-version-check --upgrade pip
-    "${VENV_BIN}/pip" install --quiet --disable-pip-version-check -e .
+    # A venv created by `uv venv` ships without pip; venvs from ensure_venv
+    # always have it.
+    if [ -x "${VENV_BIN}/pip" ]; then
+        "${VENV_BIN}/pip" install --quiet --disable-pip-version-check --upgrade pip
+        "${VENV_BIN}/pip" install --quiet --disable-pip-version-check -e .
+    elif command -v uv >/dev/null 2>&1; then
+        uv pip install --quiet --python "${VENV_BIN}/python" -e .
+    else
+        err "Cannot install dependencies: neither '${VENV_BIN}/pip' nor 'uv' exists."
+        err "Add pip to the venv ('${VENV_BIN}/python -m ensurepip --upgrade'),"
+        err "or install uv (https://docs.astral.sh/uv/), then re-run."
+        exit 1
+    fi
     touch "$INSTALL_MARKER"
 }
 

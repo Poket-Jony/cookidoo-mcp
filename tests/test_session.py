@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cookidoo_api import CookidooLocalizationConfig
 from cookidoo_api.exceptions import (
     CookidooAuthException,
     CookidooConfigException,
@@ -48,6 +49,7 @@ from cookidough_mcp.session import (
     _custom_recipe_item_to_dto,
     _draft_to_payload,
     _localization_origin,
+    _match_localization,
     _parse_duration_seconds,
     _redact_email,
     _redact_error_body,
@@ -280,8 +282,8 @@ async def test_ensure_logged_in_translates_auth_exception(
 ) -> None:
     session = CookidoughSession(settings)
 
-    async def _options(country: str, language: str) -> list[Any]:
-        return [_NS(country_code=country, language=language, url="https://x/x")]
+    async def _options(country: str) -> list[Any]:
+        return [_NS(country_code=country, language="de-DE", url="https://x/x")]
 
     monkeypatch.setattr("cookidough_mcp.session.get_localization_options", _options)
 
@@ -293,6 +295,104 @@ async def test_ensure_logged_in_translates_auth_exception(
 
     with pytest.raises(AuthenticationError):
         await session._ensure_logged_in()
+
+
+def _locale(language: str) -> CookidooLocalizationConfig:
+    return CookidooLocalizationConfig(
+        country_code="xx", language=language, url=f"https://cookidoo.xx/foundation/{language}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("published", "wanted", "expected"),
+    [
+        (["de-DE"], "de-DE", "de-DE"),
+        # Poland and Czechia are published without a region subtag, so the
+        # canonical tag Settings builds ("pl-PL") never matches.
+        (["pl"], "pl-PL", "pl"),
+        (["cs"], "cs-CZ", "cs"),
+        # Chinese carries a script subtag, which Settings uppercases to
+        # "zh-HANS" — only the primary-subtag fallback reaches it.
+        (["zh-Hans"], "zh-HANS", "zh-Hans"),
+        (["zh-Hans"], "zh-CN", "zh-Hans"),
+        # A regional variant is better than nothing when the exact tag is absent.
+        (["en", "pt-BR"], "pt-AE", "pt-BR"),
+        # Exact match wins over any primary-subtag sibling, regardless of order.
+        (["de-BE", "de-DE"], "de-DE", "de-DE"),
+        (["nl-BE", "en", "fr-BE"], "en-NL", "en"),
+    ],
+)
+def test_match_localization_resolves_published_tag(
+    published: list[str], wanted: str, expected: str
+) -> None:
+    match = _match_localization([_locale(tag) for tag in published], wanted)
+    assert match is not None
+    assert match.language == expected
+
+
+@pytest.mark.parametrize(
+    ("published", "wanted"),
+    [
+        (["de-DE", "fr-FR"], "pl-PL"),
+        ([], "de-DE"),
+    ],
+)
+def test_match_localization_returns_none_when_language_is_absent(
+    published: list[str], wanted: str
+) -> None:
+    assert _match_localization([_locale(tag) for tag in published], wanted) is None
+
+
+async def test_ensure_logged_in_raises_when_no_locale_matches(
+    settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = CookidoughSession(settings)
+
+    async def _options(country: str) -> list[Any]:
+        return [_NS(country_code=country, language="fr-FR", url="https://cookidoo.fr")]
+
+    monkeypatch.setattr("cookidough_mcp.session.get_localization_options", _options)
+
+    try:
+        with pytest.raises(AuthenticationError, match="de-DE"):
+            await session._ensure_logged_in()
+    finally:
+        await session.aclose()
+
+
+async def test_ensure_logged_in_uses_bare_language_market(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        email="test@example.com",
+        password=SecretStr("hunter2"),
+        country="pl",
+        language="pl",
+    )
+    session = CookidoughSession(settings)
+    seen: dict[str, Any] = {}
+
+    async def _options(country: str) -> list[Any]:
+        return [_NS(country_code=country, language="pl", url="https://cookidoo.pl")]
+
+    monkeypatch.setattr("cookidough_mcp.session.get_localization_options", _options)
+
+    class _OkClient:
+        async def login(self) -> None:
+            return None
+
+    def _capture(**kwargs: Any) -> Any:
+        seen["localization"] = kwargs["cfg"].localization
+        return _OkClient()
+
+    monkeypatch.setattr("cookidough_mcp.session.Cookidoo", _capture)
+
+    try:
+        await session._ensure_logged_in()
+    finally:
+        await session.aclose()
+
+    assert seen["localization"].url == "https://cookidoo.pl"
 
 
 async def test_relogin_is_skipped_when_generation_advanced(
@@ -450,8 +550,8 @@ async def test_ensure_logged_in_skips_login_when_cookies_restore_session(
     session = CookidoughSession(settings)
     client: Any = _CookieClient(logged_in_after_load=True)
 
-    async def _options(country: str, language: str) -> list[Any]:
-        return [_NS(country_code=country, language=language, url="https://cookidoo.de")]
+    async def _options(country: str) -> list[Any]:
+        return [_NS(country_code=country, language="de-DE", url="https://cookidoo.de")]
 
     monkeypatch.setattr("cookidough_mcp.session.get_localization_options", _options)
     monkeypatch.setattr("cookidough_mcp.session.Cookidoo", lambda **_: client)
@@ -474,8 +574,8 @@ async def test_ensure_logged_in_persists_cookies_after_fresh_login(
     session = CookidoughSession(settings)
     client = _CookieClient()  # no cookie file on disk → fresh login
 
-    async def _options(country: str, language: str) -> list[Any]:
-        return [_NS(country_code=country, language=language, url="https://cookidoo.de")]
+    async def _options(country: str) -> list[Any]:
+        return [_NS(country_code=country, language="de-DE", url="https://cookidoo.de")]
 
     monkeypatch.setattr("cookidough_mcp.session.get_localization_options", _options)
     monkeypatch.setattr("cookidough_mcp.session.Cookidoo", lambda **_: client)
@@ -1107,7 +1207,7 @@ def test_step_annotation_discriminator_dispatches_every_mode() -> None:
 
 
 def test_draft_to_payload_accepts_mode_annotation_from_raw_dict() -> None:
-    """Wire-format dicts coming through FastMCP are validated via the discriminator."""
+    """Wire-format dicts coming through MCPServer are validated via the discriminator."""
     draft = CustomRecipeDraft.model_validate(
         {
             "name": "X",

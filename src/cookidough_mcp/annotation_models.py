@@ -10,7 +10,7 @@ to avoid a circular dependency. The internal ``_AnnotationModel`` base
 mirrors the ``extra='ignore'`` config used by tool-IO DTOs.
 
 ``from __future__ import annotations`` is intentionally omitted — Pydantic 2
-and FastMCP introspect concrete types at runtime to build JSON schemas and
+and the MCP server introspect concrete types at runtime to build JSON schemas and
 the discriminated-union dispatch table.
 
 Adding a new ``MODE`` variant (when Cookidoo introduces one) takes four
@@ -96,7 +96,7 @@ class _AnnotationModel(BaseModel):
 class _AnnotationDataModel(_AnnotationModel):
     """Base for annotation ``data`` submodels.
 
-    Strips ``None`` fields on serialization so FastMCP tool responses match
+    Strips ``None`` fields on serialization so MCP tool responses match
     the Cookidoo wire format, which omits absent optional fields rather
     than emitting ``null``.
     """

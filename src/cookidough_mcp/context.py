@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 
 from .config import Settings
 from .quality import QualityScorer
@@ -15,7 +15,7 @@ from .web_import import WebRecipeImporter
 
 @dataclass(frozen=True)
 class AppContext:
-    """Dependencies injected into every tool call via FastMCP's lifespan."""
+    """Dependencies injected into every tool call via the MCP server's lifespan."""
 
     settings: Settings
     session: CookidoughSessionProtocol
@@ -23,7 +23,7 @@ class AppContext:
     importer: WebRecipeImporter
 
 
-ToolContext = Context[Any, AppContext, Any]
+ToolContext = Context[AppContext, Any]
 
 
 def get_context(ctx: ToolContext) -> AppContext:

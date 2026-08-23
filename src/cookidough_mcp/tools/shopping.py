@@ -15,10 +15,10 @@ from ..models import (
 )
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
-def register(mcp: FastMCP) -> None:
+def register(mcp: MCPServer) -> None:
     @mcp.tool()
     async def get_shopping_list(ctx: ToolContext) -> ShoppingList:
         """Return all items on the user's shopping list, grouped by source.

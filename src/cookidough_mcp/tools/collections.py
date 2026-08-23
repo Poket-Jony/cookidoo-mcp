@@ -8,10 +8,10 @@ from ..context import ToolContext, get_context
 from ..models import CollectionPage, CollectionSummary
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
-def register(mcp: FastMCP) -> None:
+def register(mcp: MCPServer) -> None:
     @mcp.tool()
     async def list_managed_collections(ctx: ToolContext, page: int = 0) -> CollectionPage:
         """List the user's managed Cookidoo collections (Cookbooks).
