@@ -40,6 +40,10 @@ htmlcov/
 *.cookies.json
 cookies.json
 
+# Locally generated/downloaded recipe media is account-specific and can be
+# re-created from its source; do not commit it with the implementation.
+assets/
+
 # OS
 .DS_Store
 Thumbs.db

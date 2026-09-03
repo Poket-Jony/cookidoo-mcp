@@ -16,6 +16,9 @@ dependencies = [
     "mcp[cli]>=2,<3",
     "cookidoo-api>=0.17.1",
     "aiohttp>=3.9",
+    # China custom-recipe images are uploaded to Tencent Cloud Object Storage
+    # using short-lived credentials issued by Cookidoo's moderation service.
+    "cos-python-sdk-v5>=1.9",
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
     "recipe-scrapers>=15.0",
@@ -91,7 +94,7 @@ warn_redundant_casts = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["cookidoo_api.*", "recipe_scrapers.*"]
+module = ["cookidoo_api.*", "qcloud_cos.*", "recipe_scrapers.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

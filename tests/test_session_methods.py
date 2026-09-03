@@ -1504,6 +1504,87 @@ async def test_set_custom_recipe_image_signs_uploads_and_patches(
     assert result.image is not None
 
 
+async def test_set_custom_recipe_image_uses_china_moderated_upload(
+    monkeypatch: pytest.MonkeyPatch, settings: Any, tmp_path: Any
+) -> None:
+    from cookidough_mcp.china_client import ChinaCookidoo
+    from cookidough_mcp.models import CustomRecipeDetails
+
+    session, calls, _ = _interaction_session(monkeypatch, settings)
+    china_client = object.__new__(ChinaCookidoo)
+    uploaded = AsyncMock(return_value="moderated-image.png")
+    monkeypatch.setattr(china_client, "upload_custom_recipe_image", uploaded)
+    monkeypatch.setattr(session, "_ensure_logged_in", AsyncMock(return_value=china_client))
+    monkeypatch.setattr(
+        session,
+        "_custom_recipes_url",
+        AsyncMock(return_value="https://cookidoo.com.cn/created-recipes/zh-Hans-CN"),
+    )
+    monkeypatch.setattr(
+        session,
+        "get_custom_recipe_details",
+        AsyncMock(
+            return_value=CustomRecipeDetails(
+                id="cr1",
+                name="Smoothie",
+                url="https://cookidoo.com.cn/recipes/custom-recipes/cr1",
+                image="https://china.example/img/moderated-image.png",
+            )
+        ),
+    )
+    png_path = tmp_path / "photo.png"
+    png_path.write_bytes(_make_png())
+
+    await session.set_custom_recipe_image("cr1", str(png_path))
+
+    assert uploaded.await_count == 1
+    assert uploaded.await_args is not None
+    assert uploaded.await_args.args[1] == "image/png"
+    assert calls[0] == (
+        "PATCH",
+        "https://cookidoo.com.cn/created-recipes/zh-Hans-CN/cr1",
+        {
+            "image": "moderated-image.png",
+            "isImageOwnedByUser": True,
+            "isImageCopyrightOwned": True,
+        },
+    )
+
+
+async def test_set_custom_recipe_image_rejects_missing_china_readback(
+    monkeypatch: pytest.MonkeyPatch, settings: Any, tmp_path: Any
+) -> None:
+    from cookidough_mcp.china_client import ChinaCookidoo
+    from cookidough_mcp.errors import UpstreamApiError
+    from cookidough_mcp.models import CustomRecipeDetails
+
+    session, _, _ = _interaction_session(monkeypatch, settings)
+    china_client = object.__new__(ChinaCookidoo)
+    monkeypatch.setattr(
+        china_client, "upload_custom_recipe_image", AsyncMock(return_value="moderated-image.png")
+    )
+    monkeypatch.setattr(session, "_ensure_logged_in", AsyncMock(return_value=china_client))
+    monkeypatch.setattr(
+        session,
+        "_custom_recipes_url",
+        AsyncMock(return_value="https://cookidoo.com.cn/created-recipes/zh-Hans-CN"),
+    )
+    monkeypatch.setattr(
+        session,
+        "get_custom_recipe_details",
+        AsyncMock(
+            return_value=CustomRecipeDetails(
+                id="cr1", name="Smoothie", url="https://cookidoo.com.cn/recipes/custom-recipes/cr1"
+            )
+        ),
+    )
+    png_path = tmp_path / "photo.png"
+    png_path.write_bytes(_make_png())
+
+    with pytest.raises(UpstreamApiError, match="did not persist"):
+        await session.set_custom_recipe_image("cr1", str(png_path))
+
+
 async def test_load_image_bytes_validates_input(
     monkeypatch: pytest.MonkeyPatch, settings: Any, tmp_path: Any
 ) -> None:

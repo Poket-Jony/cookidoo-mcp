@@ -25,7 +25,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    email: str = Field(min_length=3, description="Cookidoo account email.")
+    email: str = Field(
+        min_length=3,
+        description="Cookidoo account email, or a mainland-China phone number when country=cn.",
+    )
     password: SecretStr = Field(description="Cookidoo account password.")
     country: str = Field(
         default="de",
@@ -85,3 +88,22 @@ class Settings(BaseSettings):
             primary, _, region = raw.partition("-")
             return f"{primary.lower()}-{region.upper()}"
         return f"{raw.lower()}-{self.country.upper()}"
+
+    @property
+    def is_china_market(self) -> bool:
+        """Return whether this account uses Cookidoo's China deployment."""
+        return self.country_code == "cn"
+
+    @property
+    def cookidoo_origin(self) -> str | None:
+        """Return the China web origin when the China market is selected."""
+        if self.is_china_market:
+            return "https://cookidoo.com.cn"
+        return None
+
+    @property
+    def ciam_origin(self) -> str | None:
+        """Return the China identity-provider origin when applicable."""
+        if self.is_china_market:
+            return "https://ciam.production-cn.cookidoo.tmecosys.cn"
+        return None
