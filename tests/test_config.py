@@ -46,3 +46,19 @@ def test_cookies_file_parses_to_path(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(country="de", language="de")
     assert settings.cookies_file is not None
     assert settings.cookies_file.name == "cookidoo-cookies.json"
+
+
+def test_china_market_uses_the_chinese_cookidoo_hosts() -> None:
+    settings = _settings(country="cn", language="zh-Hans-CN")
+
+    assert settings.is_china_market is True
+    assert settings.cookidoo_origin == "https://cookidoo.com.cn"
+    assert settings.ciam_origin == "https://ciam.production-cn.cookidoo.tmecosys.cn"
+
+
+def test_non_china_market_keeps_the_global_cookidoo_hosts() -> None:
+    settings = _settings(country="de", language="de")
+
+    assert settings.is_china_market is False
+    assert settings.cookidoo_origin is None
+    assert settings.ciam_origin is None

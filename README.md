@@ -1,5 +1,7 @@
 # Cookidough MCP Server
 
+> **China adapter note.** This fork adds mainland-China (`cookidoo.com.cn`) phone/password login, China custom-recipe PATCH normalization, guided annotations, and Tencent COS-backed moderated image upload. It is independent, unofficial software and must never contain account credentials or session cookies.
+
 [![CI](https://github.com/Poket-Jony/cookidough-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Poket-Jony/cookidough-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/)
@@ -253,6 +255,25 @@ The server is configured purely via environment variables (see
 > account. The server writes it with `0600` permissions; keep it outside
 > any repository (the bundled `.gitignore` excludes `cookies.json` /
 > `*.cookies.json`) and treat it like a password.
+
+## China deployment
+
+The official mainland site is `https://cookidoo.com.cn/`. Configure it with a
+China phone number in `COOKIDOUGH_EMAIL`, `COOKIDOUGH_COUNTRY=cn`, and
+`COOKIDOUGH_LANGUAGE=zh-Hans-CN`. Keep the password and any optional cookie
+file outside this repository with owner-only permissions.
+
+For Hermes, use a small owner-only launcher that sources a restricted
+credentials file and then executes this repository's `cookidough-mcp` binary.
+Do not place secrets in `~/.hermes/config.yaml`: Hermes intentionally filters
+subprocess environments and the launcher keeps the MCP definition portable.
+
+China custom-recipe updates use the web editor's granular PATCH schema. Recipe
+images are downloaded or read locally, uploaded with short-lived Tencent COS
+credentials issued by Cookidoo, moderated, then attached to the recipe. The
+server reads the recipe back before reporting success. Treat every write the
+same way: fetch first, apply one intended change, then read back the exact
+recipe.
 
 ## Tool reference
 
